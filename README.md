@@ -47,7 +47,7 @@ npm run dev     # launches the app with hot reload
 Other scripts:
 
 ```bash
-npm test          # 156 tests over the domain logic, storage and local workflows
+npm test          # regression tests for calculations, storage, IPC and form state
 npm run typecheck # tsc over both the Node and the browser sides
 npm run build     # typecheck + production bundle into out/
 npm run dist:mac  # a signed-less .dmg in release/ (needs macOS)
@@ -85,7 +85,10 @@ export for trying the CSV importer.
   bills, so they're marked *recurring* in Settings: they skip pace projection entirely
   (a bill paid on the 1st is not "30x over pace"), show no pace marker, and are
   committed at their full limit in the month-end projection whether or not they've been
-  charged yet. Only day-to-day spending gets extrapolated from the daily rate.
+  charged yet. Only day-to-day spending gets extrapolated from the daily rate during
+  the current month. Past months show recorded spending; future months show known
+  commitments. Income settings, category limits and goal balances always reflect the
+  current setup, because per-month snapshots are not implemented yet.
 - **Month picker** — the month label in the header is a button: it opens a grid of all
   twelve months with ‹ › to step through years. The month being viewed is filled, the
   real current month is outlined, and a dot marks every month that actually holds
@@ -119,7 +122,7 @@ src/
     domain/   pacing · goals · csv · dates · money  (+ unit tests)
 ```
 
-Three deliberate choices:
+Four deliberate choices:
 
 1. **The domain logic is pure and shared.** `src/shared/domain/` has no Electron, no
    React and no Node dependencies, so it is unit-testable in isolation and can be
@@ -133,8 +136,14 @@ Three deliberate choices:
    colours in `src/shared/palette.ts`, applied as custom properties, so a React Native
    client can consume the same maps. Both are contrast-tested.
 
-Security posture: `contextIsolation: true`, `nodeIntegration: false`, a CSP meta tag,
-an explicit channel allow-list, and external links handed to the system browser.
+Security posture: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`,
+a CSP meta tag, and a typed channel allow-list with trusted-document and main-frame
+checks. Navigation stays inside the app; only HTTP(S) links open in the system browser.
+A single-instance lock prevents separate processes from overwriting the same JSON budget.
+
+See the [code review](docs/code-review.md) for findings and fixes, and
+[testing and maintainability notes](docs/testing.md) for the feature matrix, failure
+scenarios, desktop runner, and persistence/form-state invariants.
 
 ## Why this stack
 
@@ -178,7 +187,9 @@ transaction entry through reusable bank CSV imports.
 5. In **Bills**, link any imported bill payments to their schedules. In **Settings → Data
    & backups**, save a full backup periodically.
 
-CSV files must have a header row and be at most 25 MB. Duplicate matching uses the date,
+CSV files must have a header row and be at most 25 MB. Dates support ISO (`YYYY-MM-DD`)
+and numeric slash/dash formats with the selected day-first convention. Malformed files
+stay in the preview with an explanation; no transactions are written until import. Duplicate matching uses the date,
 amount, description and income/expense type. Turn off duplicate skipping for legitimate
 identical purchases. Transfers, credit-card payments and refunds need careful review:
 the app does not yet have an account/transfer model. Reports reflect the records present,

@@ -566,6 +566,10 @@ button:disabled {
   border-radius: var(--radius);
   box-shadow: 0 8px 24px var(--backdrop);
 }
+/* Modals render the same notice inside their keyboard-accessible dialog. */
+[inert] .error-notice {
+  display: none;
+}
 .report-legend {
   display: flex;
   gap: 20px;

@@ -236,6 +236,17 @@ export function Transactions(): JSX.Element {
           <button className="btn btn--ghost" onClick={() => setSelection(new Set())}>
             Clear selection
           </button>
+          {bulkCategory &&
+            visible.some(
+              (t) =>
+                selected.includes(t.id) &&
+                t.billId &&
+                t.categoryId !== (bulkCategory === 'none' ? null : bulkCategory)
+            ) && (
+              <span className="muted">
+                Changing a linked payment’s category will unlink it from its bill.
+              </span>
+            )}
         </div>
       )}
 
@@ -393,6 +404,7 @@ function TransactionDialog({
   const amountText = draft.amount === 0 ? '' : String(draft.amount)
 
   const submit = async (): Promise<void> => {
+    if (busy) return
     const saved = await mutate(() =>
       isEdit
         ? window.budget.updateTransaction(draft as Transaction)
@@ -461,8 +473,17 @@ function TransactionDialog({
             </select>
           </Field>
         </div>
+        {isEdit &&
+          'billId' in initial &&
+          initial.billId &&
+          (draft.kind !== 'expense' || draft.categoryId !== initial.categoryId) && (
+            <p className="banner-warning">
+              Changing this payment’s type or category will unlink it from its bill. The bill will
+              need another payment linked or recorded.
+            </p>
+          )}
         <div className="modal__actions">
-          <button type="button" className="btn" onClick={onClose}>
+          <button type="button" className="btn" disabled={busy} onClick={onClose}>
             Cancel
           </button>
           <button

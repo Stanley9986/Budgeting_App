@@ -51,6 +51,11 @@ export function monthsUntil(from: Date, to: Date): number {
 
 export function addMonths(d: Date, n: number): Date {
   const copy = new Date(d)
+  // Moving January 31 directly to February rolls into March in JavaScript.
+  // Select the destination month first, then clamp to its last calendar day.
+  const day = copy.getDate()
+  copy.setDate(1)
   copy.setMonth(copy.getMonth() + n)
+  copy.setDate(Math.min(day, daysInMonth(copy.getFullYear(), copy.getMonth() + 1)))
   return copy
 }

@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { isDeepStrictEqual } from 'util'
 import { round2 } from '../../shared/domain/money'
 import { getTheme } from '../../shared/themes'
 import type {
@@ -37,10 +38,14 @@ export class BudgetStore {
   private commit(next: AppData): AppData {
     validateData(next)
     const previous = this.read()
+    // Retried deletes, duplicate-only imports and unchanged forms should not
+    // hide the last meaningful action behind an empty undo step.
+    if (isDeepStrictEqual(previous, next)) return previous
     this.db.save(next)
-    this.history.push(structuredClone(previous))
+    // History changes only after durable storage succeeds, including on undo.
+    this.history.push(previous)
     if (this.history.length > 20) this.history.shift()
-    return next
+    return this.read()
   }
 
   canUndo(): boolean {
@@ -52,7 +57,7 @@ export class BudgetStore {
     if (!previous) return this.read()
     this.db.save(previous)
     this.history.pop()
-    return previous
+    return this.read()
   }
 
   restore(data: AppData): AppData {
@@ -80,7 +85,12 @@ export class BudgetStore {
       contains: input.contains.trim(),
       categoryId: input.categoryId
     }
-    return this.commit({ ...data, rules: [...data.rules.filter((r) => r.id !== rule.id), rule] })
+    // Equal-length rule matches use saved order, so edits must preserve the slot.
+    const exists = data.rules.some((r) => r.id === rule.id)
+    return this.commit({
+      ...data,
+      rules: exists ? data.rules.map((r) => (r.id === rule.id ? rule : r)) : [...data.rules, rule]
+    })
   }
 
   deleteRule(id: string): AppData {
@@ -90,6 +100,19 @@ export class BudgetStore {
 
   bulkTransactions(ids: string[], action: BulkTransactionAction): AppData {
     const data = this.read()
+    if (
+      !Array.isArray(ids) ||
+      !ids.every((id) => typeof id === 'string') ||
+      !action ||
+      typeof action !== 'object' ||
+      Array.isArray(action) ||
+      ['delete', 'applyRules', 'reviewed'].some((key) => {
+        const value = action[key as keyof BulkTransactionAction]
+        return value !== undefined && typeof value !== 'boolean'
+      })
+    ) {
+      throw new Error('Invalid bulk transaction action.')
+    }
     const selected = new Set(ids)
     if (action.categoryId && !data.categories.some((c) => c.id === action.categoryId))
       throw new Error('Choose an existing category.')
@@ -102,7 +125,7 @@ export class BudgetStore {
           let next = action.applyRules ? applyCategoryRules(t, data.rules) : { ...t }
           if (action.categoryId !== undefined) next = { ...next, categoryId: action.categoryId }
           if (action.reviewed !== undefined) next = { ...next, reviewed: action.reviewed }
-          return next
+          return detachChangedBillPayment(t, next)
         })
     })
   }
@@ -181,10 +204,10 @@ export class BudgetStore {
       profile: {
         ...data.profile,
         ...profile,
-        annualSalary: Math.max(0, Number(profile.annualSalary) || 0),
-        hourlyRate: Math.max(0, Number(profile.hourlyRate) || 0),
-        hoursPerWeek: clamp(Number(profile.hoursPerWeek) || 0, 0, 168),
-        withholdingPct: clamp(Number(profile.withholdingPct) || 0, 0, 100),
+        annualSalary: Math.max(0, finiteNumber(profile.annualSalary, 'annual salary')),
+        hourlyRate: Math.max(0, finiteNumber(profile.hourlyRate, 'hourly rate')),
+        hoursPerWeek: clamp(finiteNumber(profile.hoursPerWeek, 'hours per week'), 0, 168),
+        withholdingPct: clamp(finiteNumber(profile.withholdingPct, 'withholding percentage'), 0, 100),
         // Never persist a theme id the app can't render.
         themeId: getTheme(profile.themeId).id
       }
@@ -193,7 +216,7 @@ export class BudgetStore {
 
   upsertCategory(input: NewCategory): AppData {
     const data = this.read()
-    const monthlyLimit = Math.max(0, round2(Number(input.monthlyLimit) || 0))
+    const monthlyLimit = Math.max(0, round2(finiteNumber(input.monthlyLimit, 'monthly limit')))
     const name = input.name.trim() || 'Untitled'
     if (input.id && data.categories.some((c) => c.id === input.id)) {
       return this.commit({
@@ -241,8 +264,8 @@ export class BudgetStore {
     const goal = {
       name: input.name.trim() || 'Untitled goal',
       horizon: input.horizon,
-      targetAmount: Math.max(0, round2(Number(input.targetAmount) || 0)),
-      savedAmount: Math.max(0, round2(Number(input.savedAmount) || 0)),
+      targetAmount: Math.max(0, round2(finiteNumber(input.targetAmount, 'target amount'))),
+      savedAmount: Math.max(0, round2(finiteNumber(input.savedAmount, 'saved amount'))),
       targetDate: input.targetDate
     }
     if (input.id && data.goals.some((g) => g.id === input.id)) {
@@ -272,10 +295,14 @@ export class BudgetStore {
 
   updateTransaction(tx: Transaction): AppData {
     const data = this.read()
+    if (!data.transactions.some((t) => t.id === tx.id))
+      throw new Error('This transaction no longer exists. Refresh and try again.')
     return this.commit({
       ...data,
       transactions: data.transactions.map((t) =>
-        t.id === tx.id ? { ...normalize(tx, data), id: t.id, createdAt: t.createdAt } : t
+        t.id === tx.id
+          ? detachChangedBillPayment(t, { ...normalize(tx, data), id: t.id, createdAt: t.createdAt })
+          : t
       )
     })
   }
@@ -290,6 +317,8 @@ export class BudgetStore {
     skipDuplicates = true,
     incomeBasis?: Profile['incomeBasis']
   ): AppData {
+    if (!Array.isArray(inputs) || typeof skipDuplicates !== 'boolean')
+      throw new Error('Invalid transaction import options.')
     const data = this.read()
     const normalized = inputs.map((input) =>
       normalize(applyCategoryRules({ ...input, source: 'csv', reviewed: false }, data.rules), data)
@@ -313,8 +342,9 @@ export class BudgetStore {
 
 function normalize(input: NewTransaction | Transaction, data: AppData): Transaction {
   if (!isISODate(input.date)) throw new Error('Enter a valid transaction date.')
-  if (!Number.isFinite(Number(input.amount)) || Math.abs(round2(Number(input.amount))) <= 0)
-    throw new Error('Enter an amount greater than zero.')
+  const amount = Math.abs(round2(finiteNumber(input.amount, 'transaction amount')))
+  if (amount <= 0) throw new Error('Enter an amount greater than zero.')
+  if (!['expense', 'income'].includes(input.kind)) throw new Error('Choose an expense or income.')
   const categoryId =
     input.categoryId && data.categories.some((c) => c.id === input.categoryId)
       ? input.categoryId
@@ -323,8 +353,8 @@ function normalize(input: NewTransaction | Transaction, data: AppData): Transact
     id: 'id' in input && input.id ? input.id : randomUUID(),
     date: input.date,
     description: input.description.trim() || 'Untitled',
-    amount: Math.abs(round2(Number(input.amount) || 0)),
-    kind: input.kind === 'income' ? 'income' : 'expense',
+    amount,
+    kind: input.kind,
     categoryId,
     source: input.source ?? 'manual',
     createdAt: 'createdAt' in input && input.createdAt ? input.createdAt : new Date().toISOString(),
@@ -336,4 +366,19 @@ function normalize(input: NewTransaction | Transaction, data: AppData): Transact
 
 function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n))
+}
+
+/** Reject malformed IPC numbers before normalization can quietly turn them into zero. */
+function finiteNumber(value: number, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value))
+    throw new Error(`Enter a valid ${field}.`)
+  return value
+}
+
+/** A changed payment must not keep a different expense's bill marked as paid. */
+function detachChangedBillPayment(previous: Transaction, next: Transaction): Transaction {
+  if (previous.billId && (next.kind !== 'expense' || next.categoryId !== previous.categoryId)) {
+    return { ...next, billId: undefined, billDueDate: undefined }
+  }
+  return next
 }

@@ -14,7 +14,19 @@ export function Dashboard({ onNavigate }: { onNavigate: (r: Route) => void }): J
 
   const currency = data.profile.currency
   const money = (n: number): string => formatMoney(n, currency)
-  const copy = STATUS_COPY[pace.status]
+  const copy =
+    pace.period === 'past'
+      ? {
+          label: 'Month in review',
+          blurb: 'Recorded spending, compared with your current budget and goal settings.'
+        }
+      : pace.period === 'future'
+        ? {
+            label: 'Planning ahead',
+            blurb:
+              'Known expenses and fixed commitments. A daily spending forecast starts when the month begins.'
+          }
+        : STATUS_COPY[pace.status]
   const goals = allGoalProgress(data.goals)
   const hasAnything =
     data.transactions.length > 0 ||
@@ -29,7 +41,14 @@ export function Dashboard({ onNavigate }: { onNavigate: (r: Route) => void }): J
       <div className="page-head">
         <div>
           <h1>Hi{data.profile.name ? `, ${data.profile.name}` : ''} 👋</h1>
-          <p>Here is how {monthLabel(month)} is going.</p>
+          <p>
+            {monthLabel(month)} ·{' '}
+            {pace.period === 'past'
+              ? 'monthly review'
+              : pace.period === 'future'
+                ? 'upcoming month'
+                : 'month so far'}
+          </p>
         </div>
         <MonthSwitcher />
       </div>
@@ -67,28 +86,36 @@ export function Dashboard({ onNavigate }: { onNavigate: (r: Route) => void }): J
           <p>{copy.blurb}</p>
         </div>
         <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
-          <div className="stat__label">Projected savings</div>
+          <div className="stat__label">
+            {pace.period === 'current' ? 'Projected savings' : 'Estimated savings'}
+          </div>
           <div className="tabular" style={{ fontSize: 20, fontWeight: 640, marginTop: 4 }}>
             {money(pace.projectedSavings)}
           </div>
           <div className="faint" style={{ fontSize: 12 }}>
-            goals need {money(pace.requiredSavings)}/mo
+            current goals need {money(pace.requiredSavings)}/mo
           </div>
         </div>
       </div>
 
       <div className="grid grid--3" style={{ marginBottom: 16 }}>
         <Stat
-          label="Spent so far"
+          label={pace.period === 'current' ? 'Spent so far' : 'Recorded expenses'}
           value={money(pace.spent)}
           sub={
             pace.budgetTotal > 0
-              ? `${formatPct(pace.spent / pace.budgetTotal)} of a ${money(pace.budgetTotal)} plan · pace says ${money(pace.expectedByNow)} by now`
+              ? `${formatPct(pace.spent / pace.budgetTotal)} of a ${money(pace.budgetTotal)} plan${pace.period === 'current' ? ` · pace says ${money(pace.expectedByNow)} by now` : ''}`
               : 'No category budgets set yet'
           }
         />
         <Stat
-          label="Projected month-end"
+          label={
+            pace.period === 'past'
+              ? 'Month-end spending'
+              : pace.period === 'future'
+                ? 'Known commitments'
+                : 'Projected month-end'
+          }
           value={money(pace.projectedSpend)}
           tone={
             pace.budgetTotal > 0 && pace.projectedSpend > pace.budgetTotal ? 'yellow' : undefined
@@ -98,7 +125,9 @@ export function Dashboard({ onNavigate }: { onNavigate: (r: Route) => void }): J
               ? pace.projectedSpend > pace.budgetTotal
                 ? `${money(pace.projectedSpend - pace.budgetTotal)} over plan`
                 : `${money(pace.budgetTotal - pace.projectedSpend)} under plan`
-              : 'Based on your daily rate this month'
+              : pace.period === 'current'
+                ? 'Based on your daily rate this month'
+                : 'Based on recorded expenses and known commitments'
           }
         />
         <Stat
@@ -107,8 +136,8 @@ export function Dashboard({ onNavigate }: { onNavigate: (r: Route) => void }): J
           tone={pace.savingsGap >= 0 ? 'green' : 'red'}
           sub={
             pace.savingsGap >= 0
-              ? 'Ahead of what your goals need this month'
-              : 'Short of what your goals need this month'
+              ? 'Above what your current goals need per month'
+              : 'Below what your current goals need per month'
           }
         />
       </div>
@@ -131,15 +160,16 @@ export function Dashboard({ onNavigate }: { onNavigate: (r: Route) => void }): J
                       {c.category.fixed ? (
                         <span className="faint" style={{ fontSize: 11 }}>
                           {c.spent <= 0
-                            ? `· bill not paid yet`
+                            ? `· no expense recorded`
                             : c.status === 'red'
                               ? `· over by ${money(c.spent - c.category.monthlyLimit)}`
-                              : '· paid'}
+                              : '· expense recorded'}
                         </span>
                       ) : (
                         c.status !== 'green' && (
                           <span className={`faint text-${c.status}`} style={{ fontSize: 11 }}>
-                            · pacing to {money(c.projected)}
+                            · {pace.period === 'current' ? 'pacing to' : 'recorded'}{' '}
+                            {money(c.projected)}
                           </span>
                         )
                       )}
@@ -215,12 +245,23 @@ export function Dashboard({ onNavigate }: { onNavigate: (r: Route) => void }): J
               </div>
             ))}
             <p className="muted">
-              Reserved in the month-end projection. Link payments already in your transactions to
-              keep this accurate.
+              {pace.period === 'past'
+                ? 'Unrecorded bills do not change historical spending totals.'
+                : 'Reserved in the month-end projection.'}{' '}
+              Link payments already in your transactions to keep this accurate.
             </p>
           </Card>
         </div>
       )}
+      <p className="faint" style={{ fontSize: 12, marginTop: 18 }}>
+        Savings use{' '}
+        {data.profile.incomeBasis === 'recorded'
+          ? 'recorded income'
+          : data.profile.incomeBasis === 'estimate'
+            ? 'your income estimate'
+            : 'your income estimate plus income entries'}
+        . Budget limits, income settings and goal balances reflect your current setup.
+      </p>
     </>
   )
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Goal } from '../../types'
-import { goalProgress, requiredMonthlySavings } from '../goals'
+import { allGoalProgress, goalProgress, requiredMonthlySavings } from '../goals'
 
 const car: Goal = {
   id: 'car',
@@ -38,6 +38,17 @@ describe('goalProgress', () => {
     expect(goalProgress(car, new Date(2027, 0, 15)).overdue).toBe(true)
   })
 
+  it('keeps the entire target date available for funding in local time', () => {
+    expect(goalProgress(car, new Date(2026, 11, 31, 23, 59)).overdue).toBe(false)
+    expect(goalProgress(car, new Date(2027, 0, 1)).overdue).toBe(true)
+  })
+
+  it('shows a zero-target goal as fully funded', () => {
+    expect(goalProgress({ ...car, targetAmount: 0, savedAmount: 0 })).toMatchObject({
+      funded: true, remaining: 0, progress: 1, requiredMonthly: 0, overdue: false
+    })
+  })
+
   it('clamps progress at 100% when oversaved', () => {
     expect(goalProgress({ ...car, savedAmount: 60_000 }, new Date(2026, 0, 1)).progress).toBe(1)
   })
@@ -62,5 +73,14 @@ describe('requiredMonthlySavings', () => {
 
   it('is zero with no goals', () => {
     expect(requiredMonthlySavings([], new Date())).toBe(0)
+  })
+
+  it('orders goal cards by due date without reordering stored goals', () => {
+    const earlier = { ...car, id: 'earlier', targetDate: '2026-03-01' }
+    const goals = [car, earlier]
+    expect(allGoalProgress(goals, new Date(2026, 0, 1)).map((p) => p.goal.id)).toEqual([
+      'earlier', 'car'
+    ])
+    expect(goals).toEqual([car, earlier])
   })
 })

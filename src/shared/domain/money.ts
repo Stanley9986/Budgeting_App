@@ -1,6 +1,14 @@
-/** Rounds to cents; avoids 0.1 + 0.2 style drift leaking into totals. */
+/** Round decimal cents symmetrically; expense and income totals use the same rule. */
 export function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100
+  if (!Number.isFinite(n) || n === 0) return n
+  // Shift the decimal exponent before rounding: multiplying 10.075 by 100
+  // produces 1007.4999999999999. EPSILON alone also fails at this magnitude.
+  const [coefficient, exponent = '0'] = String(Math.abs(n)).split('e')
+  const cents = Math.round(Number(`${coefficient}e${Number(exponent) + 2}`))
+  if (!Number.isFinite(cents)) return n
+  const [wholeCents, centExponent = '0'] = String(cents).split('e')
+  const rounded = Number(`${wholeCents}e${Number(centExponent) - 2}`)
+  return rounded === 0 ? 0 : Math.sign(n) * rounded
 }
 
 export function formatMoney(n: number, currency = 'USD', maximumFractionDigits = 2): string {

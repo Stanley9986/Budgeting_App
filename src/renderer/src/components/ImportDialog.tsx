@@ -26,7 +26,14 @@ export function ImportDialog({ onClose }: { onClose: () => void }): JSX.Element 
   const [incomeBasis, setIncomeBasis] = useState<Profile['incomeBasis']>(
     data?.profile.incomeBasis === 'recorded' ? 'recorded' : 'estimate'
   )
-  const headers = useMemo(() => (raw ? (parseCsv(raw)[0] ?? []) : []), [raw])
+  const headers = useMemo(() => {
+    try {
+      return raw ? (parseCsv(raw)[0] ?? []) : []
+    } catch {
+      // importCsv below supplies the line error; malformed headers must not unmount the dialog.
+      return []
+    }
+  }, [raw])
 
   const money = (n: number): string => formatMoney(n, data?.profile.currency ?? 'USD')
 
@@ -173,7 +180,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }): JSX.Element 
             Drop a bank CSV here, or choose a file below.
           </div>
           <div className="modal__actions">
-            <button className="btn" onClick={onClose}>
+            <button className="btn" disabled={busy || saving} onClick={onClose}>
               Cancel
             </button>
             <button className="btn btn--primary" onClick={() => void pick()} disabled={busy}>
@@ -358,6 +365,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }): JSX.Element 
           <div className="modal__actions">
             <button
               className="btn"
+              disabled={busy || saving}
               onClick={() => {
                 setRaw(null)
                 setFileName(null)

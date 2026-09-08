@@ -1,5 +1,5 @@
 import type { AppData, Category, Profile, Transaction } from '../types'
-import { daysInMonth, monthKey } from './dates'
+import { daysInMonth, monthKey, monthKeyOf } from './dates'
 import { requiredMonthlySavings } from './goals'
 import { round2 } from './money'
 import { billsForMonth } from './bills'
@@ -20,7 +20,7 @@ export interface CategoryPace {
   spent: number
   /**
    * Straight-line share of the limit that "should" be spent by today. For a
-   * fixed bill this is the whole limit — it is owed this month either way.
+   * fixed bill in a started month this is the whole limit. Future months are 0.
    */
   expectedByNow: number
   /** Month-end spend if the current pattern holds. */
@@ -33,7 +33,8 @@ export interface CategoryPace {
 
 export interface MonthPace {
   monthKey: string
-  /** 0-1: how far through the month we are (day 1 is never 0). */
+  period: 'past' | 'current' | 'future'
+  /** 0-1: future months are 0; day 1 of the current month is one full day. */
   elapsed: number
   daysLeft: number
   income: number
@@ -71,7 +72,7 @@ export function elapsedFraction(today: Date, key: string): number {
   if (!isSameMonth) {
     const isPast =
       today.getFullYear() > year || (today.getFullYear() === year && today.getMonth() + 1 > month)
-    return isPast ? 1 : 1 / total
+    return isPast ? 1 : 0
   }
   return clamp(today.getDate() / total, 1 / total, 1)
 }
@@ -121,9 +122,21 @@ export function overallStatus(
 export function computeMonthPace(data: AppData, key: string, today = new Date()): MonthPace {
   const [year, month] = key.split('-').map(Number)
   const totalDays = daysInMonth(year, month)
+  const currentMonth = monthKeyOf(today)
+  const period = key < currentMonth ? 'past' : key > currentMonth ? 'future' : 'current'
   const elapsed = elapsedFraction(today, key)
+  // There is no daily rate before a month starts or after it closes. Future
+  // transactions are known commitments, and historical transactions are actuals.
+  const projectionDivisor = period === 'current' ? elapsed : 1
   const monthTxs = transactionsForMonth(data.transactions, key)
-  const outstanding = billsForMonth(data, key).filter((b) => !b.transaction)
+  const outstandingByCategory = new Map<string, number>()
+  if (period !== 'past') {
+    for (const occurrence of billsForMonth(data, key)) {
+      if (occurrence.transaction) continue
+      const { categoryId, amount } = occurrence.bill
+      outstandingByCategory.set(categoryId, (outstandingByCategory.get(categoryId) ?? 0) + amount)
+    }
+  }
 
   const spentByCategory = new Map<string, number>()
   const fixedIds = new Set(data.categories.filter((c) => c.fixed).map((c) => c.id))
@@ -150,24 +163,26 @@ export function computeMonthPace(data: AppData, key: string, today = new Date())
 
   const categories: CategoryPace[] = data.categories.map((category) => {
     const catSpent = round2(spentByCategory.get(category.id) ?? 0)
-    // A fixed bill that has not been charged yet is still owed, so its month-end
-    // figure is the limit; once charged, whatever was actually charged.
-    const projected = category.fixed
-      ? round2(
-          Math.max(
-            catSpent +
-              outstanding
-                .filter((b) => b.bill.categoryId === category.id)
-                .reduce((s, b) => s + b.bill.amount, 0),
-            category.monthlyLimit
+    // Reserve at least the fixed budget while planning an open month. Once it
+    // closes, an unused budget is not an expense and must not inflate actuals.
+    const projected =
+      category.fixed && period !== 'past'
+        ? round2(
+            Math.max(
+              catSpent + (outstandingByCategory.get(category.id) ?? 0),
+              category.monthlyLimit
+            )
           )
-        )
-      : round2(catSpent / elapsed)
+        : round2(catSpent / projectionDivisor)
     return {
       category,
       spent: catSpent,
       expectedByNow: round2(
-        category.fixed ? category.monthlyLimit : category.monthlyLimit * elapsed
+        period === 'future'
+          ? 0
+          : category.fixed
+            ? category.monthlyLimit
+            : category.monthlyLimit * elapsed
       ),
       projected,
       remaining: round2(category.monthlyLimit - catSpent),
@@ -195,18 +210,21 @@ export function computeMonthPace(data: AppData, key: string, today = new Date())
       ? extraIncome
       : monthlyIncome(data.profile) + (data.profile.incomeBasis === 'estimate' ? 0 : extraIncome)
   )
-  const projectedSpend = round2(fixedCommitted + variableSpent / elapsed)
+  const projectedSpend = round2(fixedCommitted + variableSpent / projectionDivisor)
   const projectedSavings = round2(income - projectedSpend)
+  // Goal balances and income settings have no historical snapshots. Goal demand
+  // always describes today's balances, even while inspecting another month.
   const required = requiredMonthlySavings(data.goals, today)
 
   return {
     monthKey: key,
+    period,
     elapsed,
     daysLeft: Math.max(0, totalDays - Math.round(elapsed * totalDays)),
     income,
     budgetTotal,
     spent: round2(spent),
-    expectedByNow: round2(fixedBudget + variableBudget * elapsed),
+    expectedByNow: period === 'future' ? 0 : round2(fixedBudget + variableBudget * elapsed),
     projectedSpend,
     projectedSavings,
     requiredSavings: required,
@@ -224,7 +242,7 @@ export const STATUS_COPY: Record<PaceStatus, { label: string; blurb: string }> =
     blurb: 'Spending is past plan, but your goals are still within reach.'
   },
   red: {
-    label: "You're way over budget",
+    label: 'Savings need attention',
     blurb: 'At this pace this month puts your goals out of reach.'
   }
 }

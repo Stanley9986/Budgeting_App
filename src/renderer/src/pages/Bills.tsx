@@ -214,7 +214,7 @@ function BillEditor({ initial, onClose }: { initial: NewBill; onClose: () => voi
           from the first due date; existing payments stay recorded.
         </p>
         <div className="modal__actions">
-          <button type="button" className="btn" onClick={onClose}>
+          <button type="button" className="btn" disabled={busy} onClick={onClose}>
             Cancel
           </button>
           <button
@@ -267,7 +267,7 @@ function RecordBill({
         </p>
       )}
       <div className="modal__actions">
-        <button className="btn" onClick={onClose}>
+        <button className="btn" disabled={busy} onClick={onClose}>
           Cancel
         </button>
         <button

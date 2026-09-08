@@ -1,4 +1,4 @@
-import { toISODate } from '@shared/domain/dates'
+import { fromISODate, monthLabel, toISODate } from '@shared/domain/dates'
 import { allGoalProgress } from '@shared/domain/goals'
 import { formatMoney, formatPct } from '@shared/domain/money'
 import type { Goal, NewGoal } from '@shared/types'
@@ -14,7 +14,7 @@ const BLANK = (horizon: NewGoal['horizon']): NewGoal => {
 }
 
 export function Goals(): JSX.Element {
-  const { data, pace, mutate } = useAppStore()
+  const { data, pace, month, mutate, busy } = useAppStore()
   const [editing, setEditing] = useState<Goal | NewGoal | null>(null)
   if (!data || !pace) return <div />
 
@@ -50,7 +50,7 @@ export function Goals(): JSX.Element {
                 <h3 className="goal-card__name">{g.goal.name}</h3>
                 <div className="faint" style={{ fontSize: 12, marginTop: 3 }}>
                   due{' '}
-                  {new Date(g.goal.targetDate).toLocaleDateString('en-US', {
+                  {fromISODate(g.goal.targetDate).toLocaleDateString('en-US', {
                     month: 'long',
                     year: 'numeric'
                   })}
@@ -63,6 +63,7 @@ export function Goals(): JSX.Element {
                 </button>
                 <button
                   className="btn btn--ghost btn--danger"
+                  disabled={busy}
                   onClick={() => void mutate(() => window.budget.deleteGoal(g.goal.id))}
                 >
                   Delete
@@ -108,7 +109,8 @@ export function Goals(): JSX.Element {
           <p>
             Together your goals need{' '}
             <strong className="tabular">{money(pace.requiredSavings)}</strong> set aside every
-            month. This month you are pacing to save{' '}
+            month. {monthLabel(month)}{' '}
+            {pace.period === 'current' ? 'projected savings' : 'estimated savings'}:{' '}
             <strong className={`tabular text-${pace.savingsGap >= 0 ? 'green' : 'red'}`}>
               {money(pace.projectedSavings)}
             </strong>
@@ -134,7 +136,7 @@ function GoalDialog({
   initial: Goal | NewGoal
   onClose: () => void
 }): JSX.Element {
-  const { mutate } = useAppStore()
+  const { mutate, busy } = useAppStore()
   const [draft, setDraft] = useState(initial)
   const isEdit = 'id' in initial && Boolean(initial.id)
 
@@ -143,6 +145,7 @@ function GoalDialog({
       <form
         onSubmit={(e) => {
           e.preventDefault()
+          if (busy) return
           void mutate(() => window.budget.upsertGoal(draft)).then((saved) => {
             if (saved) onClose()
           })
@@ -152,6 +155,7 @@ function GoalDialog({
           <Field label="What is it?">
             <input
               autoFocus
+              required
               value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
               placeholder="Car fund"
@@ -171,8 +175,9 @@ function GoalDialog({
           <Field label="Target amount">
             <input
               type="number"
-              min="0"
-              step="100"
+              required
+              min="0.01"
+              step="0.01"
               value={draft.targetAmount || ''}
               onChange={(e) => setDraft({ ...draft, targetAmount: Number(e.target.value) })}
             />
@@ -181,7 +186,7 @@ function GoalDialog({
             <input
               type="number"
               min="0"
-              step="100"
+              step="0.01"
               value={draft.savedAmount || ''}
               onChange={(e) => setDraft({ ...draft, savedAmount: Number(e.target.value) })}
             />
@@ -192,19 +197,20 @@ function GoalDialog({
           >
             <input
               type="date"
+              required
               value={draft.targetDate}
               onChange={(e) => setDraft({ ...draft, targetDate: e.target.value })}
             />
           </Field>
         </div>
         <div className="modal__actions">
-          <button type="button" className="btn" onClick={onClose}>
+          <button type="button" className="btn" disabled={busy} onClick={onClose}>
             Cancel
           </button>
           <button
             type="submit"
             className="btn btn--primary"
-            disabled={!draft.name || draft.targetAmount <= 0}
+            disabled={busy || !draft.name.trim() || draft.targetAmount <= 0 || !draft.targetDate}
           >
             {isEdit ? 'Save goal' : 'Add goal'}
           </button>

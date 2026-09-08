@@ -1,95 +1,78 @@
-# How this is tested
+# Testing and review
 
-`npm test` runs 156 tests. They cover the parts where a bug would be silent and
-expensive — the maths and the parsing — rather than chasing coverage of React markup.
+The September 2026 review expanded the existing domain and storage tests with failure
+cases and complete Electron workflows. Tests use synthetic transactions and temporary
+files. The desktop runner checks its isolated data directory before making any change.
+The final pass completed 285 tests across 13 files, all eight Electron workflows, both
+TypeScript projects, and the production build. Reviewed screenshots include normal and
+minimum window sizes.
 
-**`src/shared/domain/__tests__/pacing.test.ts`** — income from salary vs. hourly,
-withholding, the "day 1 is one day, not zero days" edge in the elapsed-time fraction,
-month-end projection from the current daily rate, month bucketing, `activeMonths` (one key per month regardless of transaction count,
-spanning year boundaries) which drives the month picker's dots, uncategorized spend,
-the four colour transitions, and the tolerance that stops a lumpy purchase from reading
-as an overspend.
-
-Also the fixed-bill rules: a category flagged *recurring* is green the day it's paid
-rather than projected to 30x its limit, still owes its full limit before it's charged, goes red only when the bill exceeds the limit, and is
-committed at full value in the month-end projection while only variable spending
-(including uncategorized spend) is extrapolated from the daily rate.
-
-**`src/shared/domain/__tests__/goals.test.ts`** — remaining amount, progress clamping,
-whole-months-remaining, the divide-by-zero guard when a goal is due this month, overdue
-detection, and the sum across goals that drives the dashboard colour.
-
-**`src/shared/domain/__tests__/csv.test.ts`** — a quoted-field/escaped-quote CSV parser,
-CRLF, three date formats, single signed `Amount` columns vs. separate `Debit`/`Credit`
-columns, currency symbols and parenthesised negatives, category mapping, duplicate
-detection, and — importantly — that a malformed row is skipped with an explanation
-instead of failing the whole import.
-
-**`src/main/store/__tests__/budgetStore.test.ts`** — round-trips through a real
-temporary file: defaults on first run, persistence across a reopen, normalisation
-(amounts stored positive, unknown category ids dropped, withholding clamped),
-transactions surviving the deletion of their category, upsert-not-duplicate on goals,
-recovery from a corrupt data file, and the migration that backfills `fixed` on budgets
-written before that field existed — recognising the built-in categories by id or name so
-an upgrade doesn't silently demote rent to variable spending.
-
-**`src/shared/__tests__/themes.test.ts`** — every theme defines every token, ids are
-unique, an unknown id falls back to the default rather than rendering a half-styled app,
-the camelCase-to-custom-property conversion, that a *retired* theme id (Espresso) still
-falls back cleanly so an old profile renders, and that the catalogue actually leans warm
-— at least four light themes whose background has more red in it than blue. The interesting ones compute WCAG 2.1
-contrast ratios and assert, for all seven themes, that body text clears 4.5:1 on both
-surfaces, that secondary text and the red/yellow/green status colours clear 3:1, and
-that primary-button text clears 4.5:1 on the accent. This caught the original Sand
-accent at 4.46:1 and forced it a shade darker.
-
-**`src/shared/__tests__/palette.test.ts`** — the category colours are unique, stay far
-enough apart in RGB space to be told apart as 9px dots, and keep at least 2:1 contrast
-against both the lightest and darkest surfaces any theme defines (computed from the
-theme list, so a new theme with an extreme background fails this test rather than
-quietly making dots invisible). Plus the remap across *both* retired palettes — the
-original cool one and the first warm pass — each mapping to a current colour,
-case-insensitively, while a colour the user picked is left alone. A test also asserts the
-current palette never reuses a retired value, so a repaint can't silently no-op.
-
-Beyond the unit tests, the built app was launched headless (Electron driven by
-Playwright) to confirm it boots with no console errors, that the preload bridge and
-every IPC channel round-trip, and that adding a transaction through the UI reaches the
-store and comes back into the list. That pass also drives the month picker — opening it from the label,
-stepping a year back, picking a month and confirming the header follows and the popover
-closes, then confirming it also closes on an outside click and on Escape — switches
-themes and reads the resulting custom properties back off `<html>`, and asserts the theme
-preview strip has real width — it caught a collapsed flex layout that unit tests never could, since
-`button` carries `align-items: center` from the UA stylesheet.
-
-## Local desktop workflow checks (September 2026)
-
-`src/main/store/__tests__/workflows.test.ts` adds real-file checks for rule application,
-atomic imports, duplicate skipping, bulk edits, bounded undo, write failures, bill linking,
-schedule commitments, backup validation, schema migration and paycheck income treatment.
-`src/shared/domain/__tests__/workflows.test.ts` covers month-end and leap-year schedules,
-rule precedence, custom CSV mappings, date conventions, recorded reports and CSV export.
-
-`scripts/smoke.cjs` exercises the built Electron app against a disposable temporary data
-directory. It drives rule creation, custom bank formats, statement import, duplicate
-preview, review/undo, CSV export, bill linking, reports, backup/restore and failed-save
-recovery. It also takes screenshots at normal size and at the minimum 940×640 window
-size with the Midnight theme. Native file-dialog choices are supplied by the test;
-the IPC handlers, parser, filesystem writes and renderer are real.
+## Run the checks
 
 ```sh
 npm test
 npm run build
-# Optional UI check; install Playwright if it is not already provided by your environment.
-npm install --no-save --package-lock=false playwright
+# Requires Playwright available to Node; uses the installed Electron runtime.
 node scripts/smoke.cjs
 ```
 
-Alternatively, point `NODE_PATH` at an existing installation containing `playwright`.
-Set `BUDGET_SCREENSHOTS` to a directory to retain screenshots outside the disposable
-data directory. `BUDGET_DATA_DIR` is a development-only override used by the test; normal
-launches continue to use the app's normal data directory. The smoke test never loads or
-changes the user's personal budget.
+If Playwright is already bundled with your development environment, set `NODE_PATH` to
+that installation's `node_modules` directory. Otherwise install it locally with
+`npm install --no-save --package-lock=false playwright`. No browser download is needed.
+Set `BUDGET_SCREENSHOTS` to an absolute directory to keep screenshots, or
+`BUDGET_KEEP_SMOKE_DATA=1` to retain the disposable test budget after a failure.
+See [the runner guide](../scripts/README.md) for helpers and scenario organization.
 
-Not covered: live bank connections (not implemented), institution-specific CSV samples,
-Windows/Linux UI behavior, signed installers, or large-scale account reconciliation.
+`npm run build` includes both TypeScript projects and produces main, preload, and renderer
+bundles. Run the desktop tests against a fresh build whenever production code changes.
+
+## Coverage
+
+| Area | Regression and workflow checks |
+| --- | --- |
+| Dashboard and income | Salary/hourly calculations, withholding, all three income bases, monthly totals, fixed commitments, variable projections, savings gaps, status thresholds, empty and zero-limit budgets, past/current/future periods. |
+| Goals and dates | Create/edit/delete/undo both goal horizons, cent amounts, progress and funding, due-today versus overdue, leap years, short months, local-date display, month navigation and picker dismissal. |
+| Transactions | Add/edit/delete, date/type/category edits, search, sorting, category/type/review filters, all months, 100-row pagination, totals, empty states, bulk category/review/delete, selection reset and undo. |
+| CSV imports | File selection and drag/drop, cancellation, custom headers, signed amounts and debit/credit columns, day-first dates, category mapping, presets create/edit/delete/reuse, rules, duplicate preview and opt-out, atomic imports, malformed quoting/headers/rows/dates/amounts, invalid-row explanations and recovery. |
+| Categories and rules | Category add/rename/limit/recurring/delete, dependent references, rapid autosaves and latest-record patches, normalized inputs and undo, rule create/edit/delete/apply, longest-match priority and stable ties, explicit category preservation. |
+| Bills | Monthly/yearly schedules, edit/pause/delete, month-end/leap-year dates, new expenses and existing-payment links, future-date protection, duplicate links, unlink/undo, recategorizing or converting a payment, reserved commitments without double counting. |
+| Reports and exports | Six/twelve-month recorded income, expenses and net cash flow, category summaries, selected-month ranges, export of every matching row across pagination, CSV escaping, cancellation and write failure. |
+| Profile and themes | Name/avatar/income saves, normalization, unsaved-name isolation when changing themes, all nine themes, token completeness and contrast, preview sizes, persistence, minimum-window dark theme screenshots. |
+| Storage and backup | Real-file roundtrips and reopening, schema migration and future-version rejection, independent snapshots, corruption preservation, unreadable files, failed writes and undo retries, no-op history, bounded undo, full backup/restore/recovery copies, cancellation, atomic export failure, demo/reset/undo, restart persistence. |
+| Desktop boundary | Every IPC channel, validation of malformed payloads, rejection of untrusted documents and subframes, actual sandboxed preload availability and absence of renderer Node globals, startup and restart. |
+| Forms and keyboard | Queued mutation ordering/rejection recovery, unsaved field acknowledgement, normalized saves, edits while earlier writes are pending, keyboard focus trapping/restoration, inert background, dismissible errors inside dialogs and failed-save draft retention. |
+
+Domain calculations and store invariants are tested directly; desktop scenarios verify
+that real UI actions reach the preload, IPC handlers, and filesystem. Native dialog
+answers are supplied by the harness. Fault scenarios deliberately reject writes or hold
+an IPC request until the test releases it; these substitutions are restored afterwards.
+The corruption test intentionally logs the preserved invalid file and parser error.
+
+The draft tests include reverting A → B → A during a save, and queuing B then C before
+typing B again. Those cases explain why a draft cannot infer unsaved work solely by
+comparing its current value to an old stored value.
+
+## Maintainability rules
+
+- Keep calculations and parsing in `src/shared/domain`, without Electron or React imports.
+- Validate every mutation at the main-process boundary. A typed preload does not make
+  arbitrary renderer payloads trustworthy.
+- Resolve autosave patches against the latest queued snapshot; a complete stale record
+  can undo a different field's recent edit.
+- Acknowledge only the submitted fields after successful persistence. Adopt normalized
+  saved values, preserve newer typing, and clear no-op blur drafts so undo remains visible.
+- Publish a new cached snapshot and update undo history only after persistence succeeds.
+  A cancelled dialog or no-op mutation must not consume meaningful history.
+- Preserve the original budget before recovery or replacement. Permission errors are
+  not evidence of corrupt data. Never turn post-save metadata/cleanup failures into an
+  apparent failed write that invites a duplicate retry.
+- Wait for observable UI or saved state in desktop tests. Keep fixture data synthetic;
+  never point the runner at a personal budget.
+
+## Practical limits
+
+The desktop pass runs the built app on macOS. Windows/Linux UI behavior, signed installers,
+notarization, physical power-loss behavior, exhaustive screen-reader testing, and every
+bank's statement format are not covered. Calendar tests also exercise Los Angeles and
+Tokyo timezones. Bank connections, transfers, reconciliation, split transactions, and
+historical budget snapshots remain roadmap work, not existing features covered here.

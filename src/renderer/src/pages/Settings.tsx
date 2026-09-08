@@ -1,35 +1,55 @@
 import { formatMoney } from '@shared/domain/money'
 import { monthlyIncome } from '@shared/domain/pacing'
-import { THEMES, type ThemeScheme } from '@shared/themes'
-import type { Category, Profile } from '@shared/types'
-import { useEffect, useState } from 'react'
+import type { AppData, Profile } from '@shared/types'
+import { useEffect, useRef, useState } from 'react'
 import { Card, Field } from '../components/ui'
-import { useAppStore } from '../state/AppStore'
+import { useLoadedStore } from '../state/AppStore'
+import { useSyncedDraft } from '../state/useSyncedDraft'
+import { ThemePicker } from '../components/ThemePicker'
+import { CategoryEditor } from '../components/CategoryEditor'
 import { RulesEditor } from '../components/RulesEditor'
 
 const EMOJI = ['🙂', '🦊', '🐢', '🚀', '🌱', '🍀', '⭐️', '🐧', '🎧', '🧋']
 
 export function Settings(): JSX.Element {
-  const { data, mutate, busy, reportError } = useAppStore()
-  const [profile, setProfile] = useState<Profile | null>(null)
+  const { data, mutate, busy, reportError } = useLoadedStore()
+  const [profile, setProfile, profileDraft] = useSyncedDraft(data.profile)
   const [saved, setSaved] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exported, setExported] = useState(false)
 
-  useEffect(() => {
-    if (data && !profile) setProfile(data.profile)
-  }, [data, profile])
+  const savedTimer = useRef<ReturnType<typeof setTimeout>>()
+  useEffect(() => () => clearTimeout(savedTimer.current), [])
 
-  if (!data || !profile) return <div />
+  const replaceBudget = (load: () => Promise<AppData>, forceDraftReset = false): Promise<boolean> =>
+    mutate(async (current) => {
+      const next = await load()
+      // Restore cancellation returns an unchanged snapshot. Explicit demo/reset actions
+      // discard drafts even when the replacement profile happens to equal the old one.
+      if (forceDraftReset || JSON.stringify(current) !== JSON.stringify(next))
+        profileDraft.reset(next.profile)
+      return next
+    })
 
   const money = (n: number): string => formatMoney(n, profile.currency)
   const budgetTotal = data.categories.reduce((s, c) => s + c.monthlyLimit, 0)
   const income = monthlyIncome(profile)
 
   const save = async (): Promise<void> => {
-    if (!(await mutate(() => window.budget.saveProfile(profile)))) return
+    if (busy) return
+    const submitted = profile
+    if (
+      !(await mutate(async () => {
+        const next = await window.budget.saveProfile(submitted)
+        // Reflect server normalization while retaining anything typed after submission.
+        profileDraft.acknowledge(submitted, next.profile)
+        return next
+      }))
+    )
+      return
     setSaved(true)
-    setTimeout(() => setSaved(false), 1600)
+    clearTimeout(savedTimer.current)
+    savedTimer.current = setTimeout(() => setSaved(false), 1600)
   }
 
   return (
@@ -74,13 +94,11 @@ export function Settings(): JSX.Element {
 
         <Card title="Appearance">
           <ThemePicker
-            current={profile.themeId}
+            current={data.profile.themeId}
+            disabled={busy}
             onPick={(themeId) => {
-              // Applied and saved immediately — a theme you have to confirm is
-              // a theme you can't preview.
-              const next = { ...profile, themeId }
-              setProfile(next)
-              void mutate(() => window.budget.saveProfile(next))
+              // Persist only appearance. Unsaved income/name edits still require Save profile.
+              void mutate((current) => window.budget.saveProfile({ ...current.profile, themeId }))
             }}
           />
         </Card>
@@ -167,7 +185,7 @@ export function Settings(): JSX.Element {
             Estimated take-home: <strong className="tabular">{money(income)}</strong> per month.
           </p>
           <div className="btn-row" style={{ marginTop: 14 }}>
-            <button className="btn btn--primary" onClick={() => void save()}>
+            <button className="btn btn--primary" disabled={busy} onClick={() => void save()}>
               Save profile
             </button>
             {saved && <span className="text-green">Saved</span>}
@@ -176,7 +194,7 @@ export function Settings(): JSX.Element {
 
         <Card title="Monthly budget">
           <p className="muted" style={{ marginTop: 0 }}>
-            Planned spend {money(budgetTotal)} of {money(income)} take-home ·{' '}
+            Planned spend {money(budgetTotal)} of {money(income)} estimated take-home ·{' '}
             <span className={budgetTotal > income ? 'text-red' : 'text-green'}>
               {money(income - budgetTotal)} left to save
             </span>
@@ -213,7 +231,7 @@ export function Settings(): JSX.Element {
               className="btn"
               disabled={busy || exporting}
               onClick={async () => {
-                if (await mutate(() => window.budget.restoreBackup())) setProfile(null)
+                await replaceBudget(() => window.budget.restoreBackup())
               }}
             >
               Restore backup…
@@ -232,21 +250,19 @@ export function Settings(): JSX.Element {
                 if (
                   confirm(
                     'Replace your budget with demo data? You can undo this during this session.'
-                  ) &&
-                  (await mutate(() => window.budget.loadDemoData()))
+                  )
                 )
-                  setProfile(null)
+                  await replaceBudget(() => window.budget.loadDemoData(), true)
               }}
             >
               Load demo data
             </button>
             <button
               className="btn btn--danger"
+              disabled={busy}
               onClick={() => {
                 if (confirm('Erase everything and start over?'))
-                  void mutate(() => window.budget.resetData()).then((ok) => {
-                    if (ok) setProfile(null)
-                  })
+                  void replaceBudget(() => window.budget.resetData(), true)
               }}
             >
               Reset everything
@@ -254,170 +270,6 @@ export function Settings(): JSX.Element {
           </div>
         </Card>
       </div>
-    </>
-  )
-}
-
-function ThemePicker({
-  current,
-  onPick
-}: {
-  current: string
-  onPick: (id: string) => void
-}): JSX.Element {
-  const groups: [string, ThemeScheme][] = [
-    ['Light', 'light'],
-    ['Dark', 'dark']
-  ]
-
-  return (
-    <>
-      {groups.map(([label, scheme]) => (
-        <div key={scheme} style={{ marginBottom: 12 }}>
-          <div className="theme-group-label">{label}</div>
-          <div className="theme-grid">
-            {THEMES.filter((t) => t.scheme === scheme).map((theme) => (
-              <button
-                key={theme.id}
-                type="button"
-                className="theme-swatch"
-                aria-pressed={theme.id === current}
-                onClick={() => onPick(theme.id)}
-              >
-                <span className="theme-swatch__preview">
-                  <span style={{ background: theme.tokens.bg }} />
-                  <span style={{ background: theme.tokens.bgElevated }} />
-                  <span style={{ background: theme.tokens.accent }} />
-                  <span style={{ background: theme.tokens.green }} />
-                </span>
-                <span className="theme-swatch__name">
-                  {theme.name}
-                  {theme.id === current && ' ✓'}
-                </span>
-                <span className="theme-swatch__desc">{theme.description}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
-    </>
-  )
-}
-
-function CategoryEditor({
-  categories,
-  currency
-}: {
-  categories: Category[]
-  currency: string
-}): JSX.Element {
-  const { mutate } = useAppStore()
-  const [newName, setNewName] = useState('')
-
-  return (
-    <>
-      <table>
-        <thead>
-          <tr>
-            <th>Category</th>
-            <th style={{ width: 170 }}>Monthly limit</th>
-            <th
-              style={{ width: 120 }}
-              title="A bill charged as one lump each month, like rent. These skip pace projection."
-            >
-              Recurring bill
-            </th>
-            <th style={{ width: 80 }} />
-          </tr>
-        </thead>
-        <tbody>
-          {categories.map((c) => (
-            <tr key={c.id}>
-              <td>
-                <div className="cat-row__name">
-                  <span className="swatch" style={{ background: c.color }} />
-                  <input
-                    defaultValue={c.name}
-                    onBlur={(e) =>
-                      e.target.value !== c.name &&
-                      void mutate(() =>
-                        window.budget.upsertCategory({ ...c, name: e.target.value })
-                      )
-                    }
-                  />
-                </div>
-              </td>
-              <td>
-                <input
-                  type="number"
-                  min="0"
-                  step="10"
-                  defaultValue={c.monthlyLimit}
-                  onBlur={(e) =>
-                    Number(e.target.value) !== c.monthlyLimit &&
-                    void mutate(() =>
-                      window.budget.upsertCategory({ ...c, monthlyLimit: Number(e.target.value) })
-                    )
-                  }
-                />
-              </td>
-              <td>
-                <label className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={c.fixed}
-                    onChange={(e) =>
-                      void mutate(() =>
-                        window.budget.upsertCategory({ ...c, fixed: e.target.checked })
-                      )
-                    }
-                  />
-                  {c.fixed ? 'Fixed' : 'Variable'}
-                </label>
-              </td>
-              <td>
-                <div className="row-actions">
-                  <button
-                    className="btn btn--ghost btn--danger"
-                    onClick={() => void mutate(() => window.budget.deleteCategory(c.id))}
-                    title={`Delete ${c.name} (${formatMoney(c.monthlyLimit, currency)})`}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <form
-        className="btn-row"
-        style={{ marginTop: 14 }}
-        onSubmit={(e) => {
-          e.preventDefault()
-          if (!newName.trim()) return
-          void mutate(() =>
-            window.budget.upsertCategory({
-              name: newName,
-              monthlyLimit: 0,
-              color: '',
-              fixed: false
-            })
-          )
-          setNewName('')
-        }}
-      >
-        <input
-          style={{ maxWidth: 260 }}
-          placeholder="New category name"
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-        />
-        <button type="submit" className="btn">
-          Add category
-        </button>
-      </form>
     </>
   )
 }

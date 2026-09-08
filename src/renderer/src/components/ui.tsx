@@ -1,4 +1,6 @@
 import type { PaceStatus } from '@shared/domain/pacing'
+import { createPortal } from 'react-dom'
+import { useAppStore } from '../state/AppStore'
 import {
   cloneElement,
   isValidElement,
@@ -108,7 +110,9 @@ export function Field({
       {isControl
         ? cloneElement(control, {
             id,
-            'aria-describedby': hint ? `${id}-hint` : control.props['aria-describedby']
+            'aria-describedby':
+              [control.props['aria-describedby'], hint && `${id}-hint`].filter(Boolean).join(' ') ||
+              undefined
           })
         : children}
       {hint && (
@@ -131,12 +135,19 @@ export function Modal({
   children: ReactNode
   wide?: boolean
 }): JSX.Element {
+  const { error, dismissError, busy } = useAppStore()
   const dialogRef = useRef<HTMLDivElement>(null)
+  // Capture before React commits autoFocus; an effect sees the dialog's input instead.
+  const previousFocus = useRef(document.activeElement as HTMLElement | null)
   const closeRef = useRef(onClose)
-  closeRef.current = onClose
+  closeRef.current = busy ? () => undefined : onClose
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null
+    const previous = previousFocus.current
     const dialog = dialogRef.current
+    const app = document.getElementById('root')
+    const wasInert = app?.inert ?? false
+    // The portal keeps the dialog active while the underlying app is inaccessible.
+    if (app) app.inert = true
     const controls = (): HTMLElement[] =>
       Array.from(
         dialog?.querySelectorAll<HTMLElement>(
@@ -174,12 +185,13 @@ export function Modal({
     window.addEventListener('keydown', onKey)
     return () => {
       window.removeEventListener('keydown', onKey)
+      if (app) app.inert = wasInert
       if (previous?.isConnected) previous.focus()
     }
   }, [])
 
-  return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
+  return createPortal(
+    <div className="modal-backdrop" onMouseDown={() => closeRef.current()}>
       <div
         className="modal"
         ref={dialogRef}
@@ -191,9 +203,20 @@ export function Modal({
         aria-label={title}
       >
         <h2>{title}</h2>
-        {children}
+        {error && (
+          <div className="banner-warning" role="alert">
+            <p>{error}</p>
+            <button className="btn" onClick={dismissError}>
+              Dismiss
+            </button>
+          </div>
+        )}
+        <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+          {children}
+        </fieldset>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 

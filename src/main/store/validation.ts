@@ -9,7 +9,7 @@ const text = (v: unknown): boolean => typeof v === 'string'
 
 /** Check the complete candidate before any restore or disk write can replace real data. */
 export function validateData(data: AppData): AppData {
-  assert(data && typeof data === 'object', 'Invalid budget file.')
+  assert(data && typeof data === 'object' && !Array.isArray(data), 'Invalid budget file.')
   assert(data.version === 2, 'Unsupported budget schema version.')
   const p = data.profile
   assert(
@@ -17,8 +17,11 @@ export function validateData(data: AppData): AppData {
       ['estimate', 'recorded', 'estimate-plus-extra'].includes(p.incomeBasis),
     'Invalid income basis.'
   )
-  assert(p && text(p.name) && text(p.avatarEmoji) && text(p.themeId), 'Invalid profile.')
-  assert(/^[A-Z]{3}$/.test(p.currency), 'Invalid currency.')
+  assert(
+    p && !Array.isArray(p) && text(p.name) && text(p.avatarEmoji) && text(p.themeId),
+    'Invalid profile.'
+  )
+  assert(text(p.currency) && /^[A-Z]{3}$/.test(p.currency), 'Invalid currency.')
   assert(['salary', 'hourly'].includes(p.incomeMethod), 'Invalid income method.')
   assert(
     [p.annualSalary, p.hourlyRate, p.hoursPerWeek, p.withholdingPct].every(nonnegative) &&
@@ -53,6 +56,7 @@ export function validateData(data: AppData): AppData {
         typeof preset.dayFirst === 'boolean' &&
         preset.columns &&
         typeof preset.columns === 'object' &&
+        !Array.isArray(preset.columns) &&
         Object.entries(preset.columns).every(
           ([key, value]) =>
             ['date', 'description', 'amount', 'debit', 'credit', 'category'].includes(key) &&

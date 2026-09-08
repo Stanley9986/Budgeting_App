@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
+import { randomUUID } from 'crypto'
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import type { AppData } from '../../shared/types'
 import type { Database } from './database'
@@ -7,6 +8,8 @@ import { defaultAppData, defaultCategories } from './defaults'
 import { validateData } from './validation'
 
 export const SCHEMA_VERSION = 2
+
+class NewerBudgetVersionError extends Error {}
 
 /**
  * Stores everything in one JSON document inside Electron's userData directory.
@@ -27,37 +30,57 @@ export class JsonDatabase implements Database {
   }
 
   load(): AppData {
-    if (this.cache) return this.cache
-    if (!existsSync(this.filePath)) {
-      this.cache = defaultAppData()
-      this.save(this.cache)
-      return this.cache
+    if (this.cache) return structuredClone(this.cache)
+    let content: string
+    try {
+      content = readFileSync(this.filePath, 'utf-8')
+    } catch (error) {
+      // Permissions and device errors are not corruption. In particular, never
+      // replace an existing budget merely because this process cannot read it.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      this.save(defaultAppData())
+      return this.load()
     }
     try {
-      this.cache = parseBudgetFile(readFileSync(this.filePath, 'utf-8'))
-      return this.cache
+      this.cache = parseBudgetFile(content)
+      return structuredClone(this.cache)
     } catch (error) {
-      if (error instanceof Error && error.message.includes('newer version')) throw error
-      // A corrupt file should not brick the app: keep a copy and start clean.
-      console.error('[db] could not read data file, starting fresh:', error)
-      try {
-        renameSync(this.filePath, `${this.filePath}.corrupt-${Date.now()}`)
-      } catch {
-        /* best effort */
-      }
-      this.cache = defaultAppData()
-      this.save(this.cache)
-      return this.cache
+      if (error instanceof NewerBudgetVersionError) throw error
+      // Recovery is allowed only after the original is safely preserved. If
+      // archiving fails, propagate the error and leave the original untouched.
+      const recoveryPath = `${this.filePath}.corrupt-${Date.now()}-${randomUUID()}`
+      renameSync(this.filePath, recoveryPath)
+      console.error(`[db] invalid budget preserved at ${recoveryPath}:`, error)
+      this.save(defaultAppData())
+      return this.load()
     }
   }
 
   save(data: AppData): void {
     validateData(data)
     mkdirSync(dirname(this.filePath), { recursive: true })
-    const tmp = `${this.filePath}.tmp`
-    writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8')
-    renameSync(tmp, this.filePath)
-    this.cache = data
+    // Take ownership before I/O so a caller cannot mutate the cache by keeping
+    // a reference to an object that was passed to save().
+    const snapshot = structuredClone(data)
+    const tmp = `${this.filePath}.${randomUUID()}.tmp`
+    try {
+      writeFileSync(tmp, JSON.stringify(snapshot, null, 2), {
+        encoding: 'utf-8',
+        mode: 0o600,
+        flag: 'wx',
+        flush: true
+      })
+      renameSync(tmp, this.filePath)
+      this.cache = snapshot
+    } finally {
+      // A failed write never changes the cache or leaves a partial replacement.
+      try {
+        rmSync(tmp, { force: true })
+      } catch (error) {
+        // Cleanup must not turn a successful rename into an apparent failed save.
+        console.error('[db] could not remove temporary file:', error)
+      }
+    }
   }
 }
 
@@ -72,9 +95,11 @@ export function parseBudgetFile(content: string): AppData {
     throw new Error('This is not a Budgeting App backup.')
   }
   if (data.version > SCHEMA_VERSION)
-    throw new Error('This budget needs a newer version of the app.')
+    throw new NewerBudgetVersionError('This budget needs a newer version of the app.')
   if (
     !data.profile ||
+    typeof data.profile !== 'object' ||
+    Array.isArray(data.profile) ||
     !Array.isArray(data.categories) ||
     !Array.isArray(data.goals) ||
     !Array.isArray(data.transactions)
@@ -94,15 +119,19 @@ export function parseBudgetFile(content: string): AppData {
     ...data,
     version: SCHEMA_VERSION,
     profile: {
-      ...base.profile,
+      ...(data.version === 1 ? base.profile : {}),
       ...data.profile,
-      incomeBasis: data.profile.incomeBasis ?? 'estimate-plus-extra'
+      incomeBasis: data.profile.incomeBasis === undefined
+        ? 'estimate-plus-extra'
+        : data.profile.incomeBasis
     },
     categories: (data.categories ?? base.categories).map((c) => ({
       ...c,
       // Recognise the built-in categories by id or name so an upgrade keeps
       // rent and utilities marked as bills instead of silently demoting them.
-      fixed: c.fixed ?? known.find((d) => d.id === c.id || d.name === c.name)?.fixed ?? false,
+      fixed: c.fixed === undefined && data.version === 1
+        ? known.find((d) => d.id === c.id || d.name === c.name)?.fixed ?? false
+        : c.fixed,
       color: migrateCategoryColor(c.color)
     })),
     goals: data.goals ?? [],

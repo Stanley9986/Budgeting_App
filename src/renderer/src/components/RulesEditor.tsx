@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { applyCategoryRules } from '@shared/domain/rules'
 import { useLoadedStore } from '../state/AppStore'
 import { Card, Field } from './ui'
@@ -8,6 +8,14 @@ export function RulesEditor(): JSX.Element {
   const [contains, setContains] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [editingId, setEditingId] = useState<string | undefined>()
+  useEffect(() => {
+    // Delete, undo, or restore can remove a rule while its editor is open.
+    if (editingId && !data.rules.some((rule) => rule.id === editingId)) {
+      setEditingId(undefined)
+      setContains('')
+      setCategoryId('')
+    }
+  }, [editingId, data.rules])
   const preview = data.transactions.filter(
     (t) =>
       t.kind === 'expense' &&
@@ -35,6 +43,7 @@ export function RulesEditor(): JSX.Element {
           <div className="btn-row">
             <button
               className="btn btn--ghost"
+              disabled={busy}
               onClick={() => {
                 setEditingId(r.id)
                 setContains(r.contains)
@@ -57,6 +66,7 @@ export function RulesEditor(): JSX.Element {
         style={{ marginTop: 16 }}
         onSubmit={async (e) => {
           e.preventDefault()
+          if (busy) return
           if (
             await mutate(() => window.budget.upsertRule({ id: editingId, contains, categoryId }))
           ) {
@@ -70,13 +80,19 @@ export function RulesEditor(): JSX.Element {
           <Field label="Description contains">
             <input
               required
+              disabled={busy}
               value={contains}
               onChange={(e) => setContains(e.target.value)}
               placeholder="e.g. Trader Joe"
             />
           </Field>
           <Field label="Assign category">
-            <select required value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+            <select
+              required
+              disabled={busy}
+              value={categoryId}
+              onChange={(e) => setCategoryId(e.target.value)}
+            >
               <option value="">Choose category</option>
               {data.categories.map((c) => (
                 <option key={c.id} value={c.id}>

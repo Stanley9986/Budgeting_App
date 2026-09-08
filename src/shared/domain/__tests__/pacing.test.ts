@@ -45,6 +45,12 @@ describe('monthlyIncome', () => {
   it('applies withholding', () => {
     expect(monthlyIncome({ ...profile, withholdingPct: 25 })).toBe(7500)
   })
+
+  it('keeps withholding inside 0–100% and prevents negative take-home income', () => {
+    expect(monthlyIncome({ ...profile, withholdingPct: -5 })).toBe(10_000)
+    expect(monthlyIncome({ ...profile, withholdingPct: 110 })).toBe(0)
+    expect(monthlyIncome({ ...profile, annualSalary: -100 })).toBe(0)
+  })
 })
 
 describe('elapsedFraction', () => {
@@ -60,8 +66,8 @@ describe('elapsedFraction', () => {
     expect(elapsedFraction(new Date(2026, 5, 10), '2026-01')).toBe(1)
   })
 
-  it('counts a future month as barely started', () => {
-    expect(elapsedFraction(new Date(2026, 0, 10), '2026-06')).toBeCloseTo(1 / 30, 5)
+  it('does not count a future month as started', () => {
+    expect(elapsedFraction(new Date(2026, 0, 10), '2026-06')).toBe(0)
   })
 })
 
@@ -211,6 +217,62 @@ describe('fixed recurring bills', () => {
 describe('computeMonthPace', () => {
   const today = new Date(2026, 0, 10) // Jan 10 -> 10/31 of the month elapsed
 
+  it('uses actual fixed expenses for a closed month and ignores unrecorded schedules', () => {
+    const data = makeData({
+      categories: [{ id: 'rent', name: 'Rent', monthlyLimit: 1800, color: '#fff', fixed: true }],
+      bills: [{ id: 'bill', name: 'Rent', categoryId: 'rent', amount: 1800, startDate: '2025-01-01', frequency: 'monthly' }],
+      transactions: [{ id: 'rent-tx', date: '2025-12-01', description: 'Rent discount', amount: 1700, kind: 'expense', categoryId: 'rent', source: 'manual', createdAt: '' }]
+    })
+    const pace = computeMonthPace(data, '2025-12', today)
+    expect(pace).toMatchObject({ period: 'past', elapsed: 1, daysLeft: 0, spent: 1700, projectedSpend: 1700 })
+    expect(pace.categories[0].projected).toBe(1700)
+    expect(computeMonthPace({ ...data, transactions: [] }, '2025-12', today).projectedSpend).toBe(0)
+  })
+
+  it('counts future entries once and reserves fixed commitments without a fictional daily rate', () => {
+    const data = makeData({
+      categories: [
+        { id: 'rent', name: 'Rent', monthlyLimit: 1800, color: '#fff', fixed: true },
+        { id: 'food', name: 'Food', monthlyLimit: 600, color: '#fff', fixed: false }
+      ],
+      transactions: [{ id: 'food-tx', date: '2026-02-10', description: 'Preordered groceries', amount: 100, kind: 'expense', categoryId: 'food', source: 'manual', createdAt: '' }]
+    })
+    const pace = computeMonthPace(data, '2026-02', today)
+    expect(pace).toMatchObject({ period: 'future', elapsed: 0, daysLeft: 28, spent: 100, projectedSpend: 1900, expectedByNow: 0 })
+    expect(pace.categories.find((c) => c.category.id === 'food')).toMatchObject({ projected: 100, expectedByNow: 0 })
+  })
+
+  it('adds outstanding fixed bills once and stops reserving each one after linking its payment', () => {
+    const bills: AppData['bills'] = [
+      { id: 'a', name: 'Internet', categoryId: 'utilities', amount: 80, startDate: '2026-01-01', frequency: 'monthly' },
+      { id: 'b', name: 'Power', categoryId: 'utilities', amount: 100, startDate: '2026-01-15', frequency: 'monthly' }
+    ]
+    const data = makeData({
+      categories: [{ id: 'utilities', name: 'Utilities', monthlyLimit: 100, color: '#fff', fixed: true }],
+      bills,
+      transactions: [{ id: 'payment', date: '2026-01-01', description: 'Internet', amount: 80, kind: 'expense', categoryId: 'utilities', source: 'csv', createdAt: '', billId: 'a', billDueDate: '2026-01-01' }]
+    })
+    expect(computeMonthPace(data, '2026-01', today).projectedSpend).toBe(180)
+    expect(computeMonthPace({ ...data, transactions: [] }, '2026-01', today).projectedSpend).toBe(180)
+  })
+
+  it.each([
+    ['estimate', 10_000],
+    ['recorded', 500],
+    ['estimate-plus-extra', 10_500]
+  ] as const)('uses the %s income basis without double counting salary', (incomeBasis, income) => {
+    const data = makeData({
+      profile: { ...profile, incomeBasis },
+      transactions: [{ id: 'salary', date: '2026-01-01', description: 'Deposit', amount: 500, kind: 'income', categoryId: null, source: 'csv', createdAt: '' }]
+    })
+    expect(computeMonthPace(data, '2026-01', today).income).toBe(income)
+  })
+
+  it('keeps current goal balances when inspecting historical spending', () => {
+    const data = makeData({ goals: [{ id: 'g', name: 'Goal', targetAmount: 1000, savedAmount: 0, targetDate: '2026-02-10', horizon: 'year', createdAt: '' }] })
+    expect(computeMonthPace(data, '2025-01', today).requiredSavings).toBe(1000)
+  })
+
   it('projects month-end spend from the current daily rate', () => {
     const data = makeData({
       transactions: [
@@ -303,6 +365,31 @@ describe('computeMonthPace', () => {
     const food = computeMonthPace(data, '2026-01', today).categories.find((c) => c.category.id === 'food')!
     expect(food.projected).toBeGreaterThan(600)
     expect(food.status).toBe('red')
+  })
+
+  it('warns on a modest variable overshoot before the category is actually over budget', () => {
+    const data = makeData({
+      categories: [{ id: 'food', name: 'Food', monthlyLimit: 600, color: '#fff', fixed: false }],
+      transactions: [{
+        id: 'food', date: '2026-01-10', description: 'Groceries', amount: 230,
+        kind: 'expense', categoryId: 'food', source: 'manual', createdAt: ''
+      }]
+    })
+    const pace = computeMonthPace(data, '2026-01', today)
+    expect(pace.categories[0]).toMatchObject({ spent: 230, projected: 713, status: 'yellow' })
+    expect(pace.status).toBe('yellow')
+  })
+
+  it('does not divide by zero for an empty category budget, but flags spending against it', () => {
+    const data = makeData({
+      categories: [{ id: 'food', name: 'Food', monthlyLimit: 0, color: '#fff', fixed: false }]
+    })
+    expect(computeMonthPace(data, '2026-01', today).categories[0]).toMatchObject({ ratio: 0, status: 'green' })
+    data.transactions.push({
+      id: 'food', date: '2026-01-10', description: 'Groceries', amount: 1,
+      kind: 'expense', categoryId: 'food', source: 'manual', createdAt: ''
+    })
+    expect(computeMonthPace(data, '2026-01', today).categories[0]).toMatchObject({ ratio: 1, status: 'red' })
   })
 
   it('does not flag a fixed monthly charge that landed on budget', () => {

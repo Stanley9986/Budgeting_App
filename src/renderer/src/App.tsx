@@ -54,7 +54,9 @@ export default function App(): JSX.Element {
             aria-current={route === item.id ? 'page' : undefined}
             onClick={() => setRoute(item.id)}
           >
-            <span className="nav-item__icon">{item.icon}</span>
+            <span className="nav-item__icon" aria-hidden="true">
+              {item.icon}
+            </span>
             {item.label}
           </button>
         ))}
@@ -76,7 +78,8 @@ export default function App(): JSX.Element {
         </div>
       </nav>
 
-      <main className="main">
+      {/* A new page gets a fresh scroll container instead of inheriting the prior page's offset. */}
+      <main className="main" key={route}>
         {route === 'dashboard' && <Dashboard onNavigate={setRoute} />}
         {route === 'transactions' && <Transactions />}
         {route === 'goals' && <Goals />}
@@ -86,7 +89,7 @@ export default function App(): JSX.Element {
       </main>
       {error && (
         <div className="error-notice" role="alert">
-          <strong>Could not complete that action.</strong>
+          <strong>Budget notice</strong>
           <p>{error}</p>
           <button className="btn" onClick={dismissError}>
             Dismiss

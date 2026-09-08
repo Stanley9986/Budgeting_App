@@ -16,7 +16,22 @@ export function billDate(bill: Bill, month: string): string | null {
   return `${month}-${String(day).padStart(2, '0')}`
 }
 
-export function billsForMonth(data: AppData, month: string): BillOccurrence[] {
+export function billsForMonth(
+  data: Pick<AppData, 'bills' | 'transactions'>,
+  month: string
+): BillOccurrence[] {
+  // An occurrence is identified by its scheduled month, even when payment was
+  // recorded early or late in a different month. Index once for large histories.
+  const payments = new Map<string, Transaction>()
+  for (const transaction of data.transactions) {
+    if (
+      transaction.billId &&
+      transaction.billDueDate?.slice(0, 7) === month &&
+      !payments.has(transaction.billId)
+    ) {
+      payments.set(transaction.billId, transaction)
+    }
+  }
   return data.bills
     .flatMap((bill) => {
       const dueDate = billDate(bill, month)
@@ -25,9 +40,7 @@ export function billsForMonth(data: AppData, month: string): BillOccurrence[] {
             {
               bill,
               dueDate,
-              transaction: data.transactions.find(
-                (t) => t.billId === bill.id && t.billDueDate?.slice(0, 7) === month
-              )
+              transaction: payments.get(bill.id)
             }
           ]
         : []

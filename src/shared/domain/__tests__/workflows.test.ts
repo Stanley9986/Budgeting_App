@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Bill, NewTransaction, Transaction } from '../../types'
-import { billDate } from '../bills'
+import { billDate, billsForMonth } from '../bills'
 import { applyCategoryRules } from '../rules'
 import { monthlyReport } from '../reports'
 import { exportTransactions } from '../export'
@@ -27,6 +27,30 @@ describe('statement import and recurring dates', () => {
     expect(billDate(annual, '2025-03')).toBeNull()
     expect(billDate(annual, '2028-02')).toBe('2028-02-29')
   })
+  it('uses the scheduled occurrence month when a bill is paid early', () => {
+    const early: Transaction = {
+      id: 'early', date: '2026-01-30', description: 'February bill', amount: 20,
+      kind: 'expense', categoryId: 'fixed', source: 'csv', createdAt: '',
+      billId: 'b', billDueDate: '2026-02-28'
+    }
+    const data = { bills: [bill], transactions: [early] }
+    expect(billsForMonth(data, '2026-01')[0].transaction).toBeUndefined()
+    expect(billsForMonth(data, '2026-02')[0]).toMatchObject({
+      dueDate: '2026-02-28', transaction: early
+    })
+  })
+  it('orders due bills by date, then name, and omits schedules not yet started', () => {
+    const data = {
+      transactions: [],
+      bills: [
+        { ...bill, id: 'z', name: 'Zebra', startDate: '2026-01-01' },
+        { ...bill, id: 'future', startDate: '2026-02-01' },
+        { ...bill, id: 'a', name: 'Alpha', startDate: '2026-01-01' },
+        bill
+      ]
+    }
+    expect(billsForMonth(data, '2026-01').map((r) => r.bill.id)).toEqual(['a', 'z', 'b'])
+  })
   it('matches the most specific rule without changing an explicit category or income', () => {
     const rules = [
       { id: 'a', contains: 'coffee', categoryId: 'food' },
@@ -42,6 +66,21 @@ describe('statement import and recurring dates', () => {
     expect(applyCategoryRules(tx, rules).categoryId).toBe('grocery')
     expect(applyCategoryRules({ ...tx, categoryId: 'gift' }, rules).categoryId).toBe('gift')
     expect(applyCategoryRules({ ...tx, kind: 'income' }, rules).categoryId).toBeNull()
+  })
+  it('trims rule phrases, preserves equal-length order and leaves inputs unchanged', () => {
+    const rules = [
+      { id: 'a', contains: '  SHOP  ', categoryId: 'first' },
+      { id: 'b', contains: 'shop', categoryId: 'second' },
+      { id: 'c', contains: ' ', categoryId: 'empty' }
+    ]
+    const tx: NewTransaction = {
+      date: '2026-01-01', description: 'SHOP', amount: 20, kind: 'expense', categoryId: null
+    }
+    const before = structuredClone(rules)
+    expect(applyCategoryRules(tx, rules).categoryId).toBe('first')
+    expect(tx.categoryId).toBeNull()
+    expect(rules).toEqual(before)
+    expect(applyCategoryRules({ ...tx, description: 'Other' }, rules).categoryId).toBeNull()
   })
   it('uses custom headers and day-first dates from a saved bank format', () => {
     const result = importCsv('Booked,Narrative,Value\n04/02/2026,Shop,20', {
@@ -108,5 +147,25 @@ describe('reports and exports', () => {
     expect(rows[2][1]).toBe('\'=HYPERLINK("bad")')
     expect(rows[2][2]).toBe('100.00')
     expect(importCsv(csv).transactions[0].kind).toBe('expense')
+  })
+  it('exports category names, multiline text and review state safely', () => {
+    const csv = exportTransactions([
+      tx({ description: 'First line\r\nsecond line', categoryId: 'cat', reviewed: false }),
+      tx({ id: '2', description: '  +SUM(1,2)' })
+    ], [{ id: 'cat', name: '@danger', color: '#fff', monthlyLimit: 100, fixed: false }])
+    const rows = parseCsv(csv)
+    expect(rows[1]).toEqual(['2026-01-01', 'First line\r\nsecond line', '-50.00', "'@danger", 'expense', 'false'])
+    expect(rows[2][1]).toBe("'  +SUM(1,2)")
+    expect(rows[2][5]).toBe('true')
+    expect(csv.endsWith('\r\n')).toBe(true)
+  })
+  it('reports only recorded transactions and rounds totals after grouping', () => {
+    const report = monthlyReport([
+      tx({ amount: 0.1 }), tx({ amount: 0.2 }), tx({ kind: 'income', amount: 1 }),
+      tx({ date: '2026-02-01', amount: 100 })
+    ], '2026-01', 1)
+    expect(report).toEqual([{ month: '2026-01', income: 1, expense: 0.3, net: 0.7, count: 3 }])
+    expect(monthlyReport([], '2026-01')).toHaveLength(6)
+    expect(monthlyReport([], '2026-01', 12)).toHaveLength(12)
   })
 })

@@ -1,13 +1,20 @@
 import type { CsvColumns, NewTransaction, TransactionKind } from '../types'
-import { isISODate, toISODate } from './dates'
+import { isISODate } from './dates'
 import { round2 } from './money'
 
-/** A minimal RFC4180 parser: quoted fields, escaped quotes, CRLF or LF. */
+/**
+ * RFC4180 fields with CRLF or LF records. Reject broken quoting instead of
+ * silently combining transactions or shifting their columns. The preview can
+ * show these errors; callers reading headers directly must also catch them.
+ */
 export function parseCsv(text: string): string[][] {
+  text = text.replace(/^\uFEFF/, '')
   const rows: string[][] = []
   let row: string[] = []
   let field = ''
   let inQuotes = false
+  let afterQuote = false
+  let line = 1
 
   for (let i = 0; i < text.length; i++) {
     const char = text[i]
@@ -18,27 +25,41 @@ export function parseCsv(text: string): string[][] {
           i++
         } else {
           inQuotes = false
+          afterQuote = true
         }
       } else {
         field += char
+        if (char === '\n' || (char === '\r' && text[i + 1] !== '\n')) line++
       }
       continue
     }
     if (char === '"') {
+      if (field || afterQuote) {
+        throw new Error(`CSV line ${line}: unexpected quote in an unquoted field.`)
+      }
       inQuotes = true
     } else if (char === ',') {
       row.push(field)
       field = ''
+      afterQuote = false
     } else if (char === '\n' || char === '\r') {
       if (char === '\r' && text[i + 1] === '\n') i++
       row.push(field)
       field = ''
+      afterQuote = false
+      line++
       if (row.some((c) => c.trim() !== '')) rows.push(row)
       row = []
     } else {
+      if (afterQuote) {
+        // Some bank exports pad a quoted field before its comma.
+        if (char === ' ' || char === '\t') continue
+        throw new Error(`CSV line ${line}: unexpected text after a closing quote.`)
+      }
       field += char
     }
   }
+  if (inQuotes) throw new Error(`CSV line ${line}: a quoted field is missing its closing quote.`)
   row.push(field)
   if (row.some((c) => c.trim() !== '')) rows.push(row)
   return rows
@@ -63,17 +84,23 @@ const HEADERS = {
 }
 
 function findColumn(header: string[], aliases: string[]): number {
-  return header.findIndex((h) => aliases.includes(h.trim().toLowerCase().replace(/^﻿/, '')))
+  return header.findIndex((h) => aliases.includes(h.trim().toLowerCase()))
 }
 
 function parseAmount(raw: string): number | null {
-  const cleaned = raw.replace(/[$,\s]/g, '').replace(/^\((.*)\)$/, '-$1')
-  if (cleaned === '' || cleaned === '-') return null
-  const n = Number(cleaned)
+  const cleaned = raw
+    .trim()
+    .replace(/^\((.*)\)$/, '-$1')
+    .replace(/^([+-]?)\s*\$\s*([+-]?)/, '$1$2')
+    .trim()
+  // Number() also accepts hex and scientific notation. Bank amounts use plain
+  // decimals; validate comma grouping before stripping separators.
+  if (!/^[+-]?(?:(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?|\.\d+)$/.test(cleaned)) return null
+  const n = Number(cleaned.replace(/,/g, ''))
   return Number.isFinite(n) ? n : null
 }
 
-/** Accepts yyyy-mm-dd, mm/dd/yyyy and mm/dd/yy. */
+/** Explicit calendar formats only: ISO, or slash/dash month/day (optionally day-first). */
 export function parseDate(raw: string, dayFirst = false): string | null {
   const s = raw.trim()
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return isISODate(s) ? s : null
@@ -82,17 +109,13 @@ export function parseDate(raw: string, dayFirst = false): string | null {
     const [, first, second, y] = slash
     const [m, d] = dayFirst ? [second, first] : [first, second]
     const year = y.length === 2 ? 2000 + Number(y) : Number(y)
-    const date = new Date(year, Number(m) - 1, Number(d))
-    if (
-      date.getFullYear() === year &&
-      date.getMonth() === Number(m) - 1 &&
-      date.getDate() === Number(d)
-    )
-      return toISODate(date)
-    return null
+    const date = `${String(year).padStart(4, '0')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+    return isISODate(date) ? date : null
   }
-  const parsed = new Date(s)
-  return Number.isNaN(parsed.getTime()) ? null : toISODate(parsed)
+  // Date.parse varies across runtimes and can normalize February 30 or apply a
+  // timezone shift to a bank's date-only value. Unsupported formats need an
+  // explicit parser before they can safely be accepted.
+  return null
 }
 
 export interface CsvImportOptions {
@@ -117,7 +140,17 @@ export interface CsvImportResult {
 }
 
 export function importCsv(text: string, options: CsvImportOptions = {}): CsvImportResult {
-  const rows = parseCsv(text)
+  let rows: string[][]
+  try {
+    rows = parseCsv(text)
+  } catch (error) {
+    return {
+      transactions: [],
+      errors: [error instanceof Error ? error.message : 'Could not parse the CSV file.'],
+      skipped: 0,
+      detected: { date: '', description: '', amount: '' }
+    }
+  }
   const errors: string[] = []
   if (rows.length < 2) {
     return {
@@ -132,12 +165,17 @@ export function importCsv(text: string, options: CsvImportOptions = {}): CsvImpo
   const column = (key: keyof CsvColumns): number => {
     const mapped = options.columns?.[key]
     if (mapped === '') return -1
-    if (mapped === undefined) return findColumn(header, HEADERS[key])
-    const index = header.indexOf(mapped)
-    if (index < 0)
+    const index = mapped === undefined ? findColumn(header, HEADERS[key]) : header.indexOf(mapped)
+    if (index < 0 && mapped !== undefined) {
       errors.push(
         `The saved ${key} column "${mapped}" is missing. Choose a column or use auto-detect.`
       )
+    } else if (index >= 0) {
+      const label = header[index].trim().toLowerCase()
+      if (header.some((h, i) => i !== index && h.trim().toLowerCase() === label)) {
+        errors.push(`The ${key} header "${header[index]}" appears more than once. Rename duplicate headers before importing.`)
+      }
+    }
     return index
   }
   const dateCol = column('date')
@@ -162,14 +200,20 @@ export function importCsv(text: string, options: CsvImportOptions = {}): CsvImpo
 
   const transactions: NewTransaction[] = []
   let skipped = 0
+  const skip = (row: number, reason: string): void => {
+    skipped++
+    if (errors.length < 5) errors.push(`Row ${row}: ${reason}`)
+  }
 
   for (let i = 1; i < rows.length; i++) {
     const cells = rows[i]
+    if (cells.length !== header.length) {
+      skip(i + 1, `expected ${header.length} columns, found ${cells.length}. Check commas and quoting.`)
+      continue
+    }
     const isoDate = parseDate(cells[dateCol] ?? '', options.dayFirst)
     if (!isoDate) {
-      skipped++
-      if (errors.length < 5)
-        errors.push(`Row ${i + 1}: could not read the date "${cells[dateCol] ?? ''}".`)
+      skip(i + 1, `could not read the date "${cells[dateCol] ?? ''}". Use YYYY-MM-DD or a slash date.`)
       continue
     }
 
@@ -180,13 +224,27 @@ export function importCsv(text: string, options: CsvImportOptions = {}): CsvImpo
     } else {
       const debit = debitCol !== -1 ? parseAmount(cells[debitCol] ?? '') : null
       const credit = creditCol !== -1 ? parseAmount(cells[creditCol] ?? '') : null
+      const hasInvalidValue = [debitCol, creditCol].some((col) => {
+        const raw = (cells[col] ?? '').trim()
+        // Blank cells and dash placeholders both represent an unused side.
+        return col !== -1 && raw !== '' && raw !== '-' && parseAmount(raw) === null
+      })
+      if (hasInvalidValue || (debit && credit)) {
+        skip(
+          i + 1,
+          hasInvalidValue
+            ? 'could not read a debit or credit amount.'
+            : 'both debit and credit contain an amount; choose one amount column.'
+        )
+        continue
+      }
       if (debit) signed = -Math.abs(debit)
       else if (credit) signed = Math.abs(credit)
     }
 
-    if (signed === null || signed === 0) {
-      skipped++
-      if (errors.length < 5) errors.push(`Row ${i + 1}: could not read an amount.`)
+    const amount = signed === null ? 0 : round2(Math.abs(signed))
+    if (signed === null || amount === 0 || !Number.isSafeInteger(Math.round(amount * 100))) {
+      skip(i + 1, 'could not read a valid nonzero amount. Check its format and size.')
       continue
     }
 
@@ -195,7 +253,7 @@ export function importCsv(text: string, options: CsvImportOptions = {}): CsvImpo
     transactions.push({
       date: isoDate,
       description: (cells[descCol] ?? '').trim() || 'Imported transaction',
-      amount: round2(Math.abs(signed)),
+      amount,
       kind,
       categoryId: label && options.resolveCategoryId ? options.resolveCategoryId(label) : null,
       source: 'csv'
