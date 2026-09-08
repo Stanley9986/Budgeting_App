@@ -4,8 +4,9 @@ import type { AppData } from '../../shared/types'
 import type { Database } from './database'
 import { migrateCategoryColor } from '../../shared/palette'
 import { defaultAppData, defaultCategories } from './defaults'
+import { validateData } from './validation'
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 /**
  * Stores everything in one JSON document inside Electron's userData directory.
@@ -33,10 +34,10 @@ export class JsonDatabase implements Database {
       return this.cache
     }
     try {
-      const parsed = JSON.parse(readFileSync(this.filePath, 'utf-8')) as AppData
-      this.cache = migrate(parsed)
+      this.cache = parseBudgetFile(readFileSync(this.filePath, 'utf-8'))
       return this.cache
     } catch (error) {
+      if (error instanceof Error && error.message.includes('newer version')) throw error
       // A corrupt file should not brick the app: keep a copy and start clean.
       console.error('[db] could not read data file, starting fresh:', error)
       try {
@@ -51,6 +52,7 @@ export class JsonDatabase implements Database {
   }
 
   save(data: AppData): void {
+    validateData(data)
     mkdirSync(dirname(this.filePath), { recursive: true })
     const tmp = `${this.filePath}.tmp`
     writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8')
@@ -64,14 +66,38 @@ export class JsonDatabase implements Database {
  * discards an existing budget. `fixed` arrived with the recurring-bill work and
  * is absent from every file written before it.
  */
-function migrate(data: AppData): AppData {
+export function parseBudgetFile(content: string): AppData {
+  const data = JSON.parse(content) as AppData
+  if (!data || typeof data !== 'object' || !Number.isInteger(data.version) || data.version < 1) {
+    throw new Error('This is not a Budgeting App backup.')
+  }
+  if (data.version > SCHEMA_VERSION)
+    throw new Error('This budget needs a newer version of the app.')
+  if (
+    !data.profile ||
+    !Array.isArray(data.categories) ||
+    !Array.isArray(data.goals) ||
+    !Array.isArray(data.transactions)
+  ) {
+    throw new Error('The budget file is missing required data.')
+  }
+  if (
+    data.version === 2 &&
+    (!Array.isArray(data.rules) || !Array.isArray(data.bills) || !Array.isArray(data.importPresets))
+  ) {
+    throw new Error('The budget file is missing rules, bills or import presets.')
+  }
   const base = defaultAppData()
   const known = defaultCategories()
-  return {
+  return validateData({
     ...base,
     ...data,
     version: SCHEMA_VERSION,
-    profile: { ...base.profile, ...data.profile },
+    profile: {
+      ...base.profile,
+      ...data.profile,
+      incomeBasis: data.profile.incomeBasis ?? 'estimate-plus-extra'
+    },
     categories: (data.categories ?? base.categories).map((c) => ({
       ...c,
       // Recognise the built-in categories by id or name so an upgrade keeps
@@ -80,6 +106,9 @@ function migrate(data: AppData): AppData {
       color: migrateCategoryColor(c.color)
     })),
     goals: data.goals ?? [],
-    transactions: data.transactions ?? []
-  }
+    transactions: data.transactions ?? [],
+    rules: data.rules ?? [],
+    bills: data.bills ?? [],
+    importPresets: data.importPresets ?? []
+  })
 }

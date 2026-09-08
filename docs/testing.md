@@ -1,6 +1,6 @@
 # How this is tested
 
-`npm test` runs 50 unit tests. They cover the parts where a bug would be silent and
+`npm test` runs 156 tests. They cover the parts where a bug would be silent and
 expensive — the maths and the parsing — rather than chasing coverage of React markup.
 
 **`src/shared/domain/__tests__/pacing.test.ts`** — income from salary vs. hourly,
@@ -61,3 +61,35 @@ closes, then confirming it also closes on an outside click and on Escape — swi
 themes and reads the resulting custom properties back off `<html>`, and asserts the theme
 preview strip has real width — it caught a collapsed flex layout that unit tests never could, since
 `button` carries `align-items: center` from the UA stylesheet.
+
+## Local desktop workflow checks (September 2026)
+
+`src/main/store/__tests__/workflows.test.ts` adds real-file checks for rule application,
+atomic imports, duplicate skipping, bulk edits, bounded undo, write failures, bill linking,
+schedule commitments, backup validation, schema migration and paycheck income treatment.
+`src/shared/domain/__tests__/workflows.test.ts` covers month-end and leap-year schedules,
+rule precedence, custom CSV mappings, date conventions, recorded reports and CSV export.
+
+`scripts/smoke.cjs` exercises the built Electron app against a disposable temporary data
+directory. It drives rule creation, custom bank formats, statement import, duplicate
+preview, review/undo, CSV export, bill linking, reports, backup/restore and failed-save
+recovery. It also takes screenshots at normal size and at the minimum 940×640 window
+size with the Midnight theme. Native file-dialog choices are supplied by the test;
+the IPC handlers, parser, filesystem writes and renderer are real.
+
+```sh
+npm test
+npm run build
+# Optional UI check; install Playwright if it is not already provided by your environment.
+npm install --no-save --package-lock=false playwright
+node scripts/smoke.cjs
+```
+
+Alternatively, point `NODE_PATH` at an existing installation containing `playwright`.
+Set `BUDGET_SCREENSHOTS` to a directory to retain screenshots outside the disposable
+data directory. `BUDGET_DATA_DIR` is a development-only override used by the test; normal
+launches continue to use the app's normal data directory. The smoke test never loads or
+changes the user's personal budget.
+
+Not covered: live bank connections (not implemented), institution-specific CSV samples,
+Windows/Linux UI behavior, signed installers, or large-scale account reconciliation.

@@ -5,13 +5,16 @@ import type { Category, Profile } from '@shared/types'
 import { useEffect, useState } from 'react'
 import { Card, Field } from '../components/ui'
 import { useAppStore } from '../state/AppStore'
+import { RulesEditor } from '../components/RulesEditor'
 
 const EMOJI = ['🙂', '🦊', '🐢', '🚀', '🌱', '🍀', '⭐️', '🐧', '🎧', '🧋']
 
 export function Settings(): JSX.Element {
-  const { data, mutate } = useAppStore()
+  const { data, mutate, busy, reportError } = useAppStore()
   const [profile, setProfile] = useState<Profile | null>(null)
   const [saved, setSaved] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exported, setExported] = useState(false)
 
   useEffect(() => {
     if (data && !profile) setProfile(data.profile)
@@ -24,7 +27,7 @@ export function Settings(): JSX.Element {
   const income = monthlyIncome(profile)
 
   const save = async (): Promise<void> => {
-    await mutate(() => window.budget.saveProfile(profile))
+    if (!(await mutate(() => window.budget.saveProfile(profile)))) return
     setSaved(true)
     setTimeout(() => setSaved(false), 1600)
   }
@@ -84,11 +87,29 @@ export function Settings(): JSX.Element {
 
         <Card title="How you earn">
           <div className="form-grid">
+            <Field
+              label="Dashboard income basis"
+              hint="Reports always use recorded income. Use estimate + entries only when every income entry is extra pay."
+            >
+              <select
+                value={profile.incomeBasis ?? 'estimate-plus-extra'}
+                onChange={(e) =>
+                  setProfile({ ...profile, incomeBasis: e.target.value as Profile['incomeBasis'] })
+                }
+              >
+                <option value="estimate">Salary/hourly estimate only</option>
+                <option value="recorded">Recorded income only</option>
+                <option value="estimate-plus-extra">Estimate + extra income entries</option>
+              </select>
+            </Field>
             <Field label="Method of measurement">
               <select
                 value={profile.incomeMethod}
                 onChange={(e) =>
-                  setProfile({ ...profile, incomeMethod: e.target.value as Profile['incomeMethod'] })
+                  setProfile({
+                    ...profile,
+                    incomeMethod: e.target.value as Profile['incomeMethod']
+                  })
                 }
               >
                 <option value="salary">Yearly salary</option>
@@ -122,12 +143,17 @@ export function Settings(): JSX.Element {
                     min="0"
                     max="168"
                     value={profile.hoursPerWeek || ''}
-                    onChange={(e) => setProfile({ ...profile, hoursPerWeek: Number(e.target.value) })}
+                    onChange={(e) =>
+                      setProfile({ ...profile, hoursPerWeek: Number(e.target.value) })
+                    }
                   />
                 </Field>
               </>
             )}
-            <Field label="Withheld for taxes (%)" hint="Rough estimate; used to get to take-home pay.">
+            <Field
+              label="Withheld for taxes (%)"
+              hint="Rough estimate; used to get to take-home pay."
+            >
               <input
                 type="number"
                 min="0"
@@ -158,20 +184,69 @@ export function Settings(): JSX.Element {
           <CategoryEditor categories={data.categories} currency={profile.currency} />
         </Card>
 
-        <Card title="Data">
+        <RulesEditor />
+
+        <Card title="Data & backups">
           <p className="muted" style={{ marginTop: 0 }}>
-            Everything lives in a JSON file in this Mac&apos;s application-support folder. Nothing is
-            uploaded anywhere.
+            Save a full backup of your profile, budgets, goals, bills, rules and transactions.
+            Backups stay wherever you save them. Export transaction CSVs from Transactions.
           </p>
           <div className="btn-row">
-            <button className="btn" onClick={() => void mutate(() => window.budget.loadDemoData())}>
+            <button
+              className="btn"
+              disabled={busy || exporting}
+              onClick={async () => {
+                setExporting(true)
+                setExported(false)
+                try {
+                  setExported(await window.budget.exportBackup())
+                } catch (e) {
+                  reportError(e)
+                } finally {
+                  setExporting(false)
+                }
+              }}
+            >
+              {exporting ? 'Saving…' : 'Save backup'}
+            </button>
+            <button
+              className="btn"
+              disabled={busy || exporting}
+              onClick={async () => {
+                if (await mutate(() => window.budget.restoreBackup())) setProfile(null)
+              }}
+            >
+              Restore backup…
+            </button>
+            {exported && (
+              <span className="text-green" role="status">
+                Backup saved
+              </span>
+            )}
+          </div>
+          <div className="btn-row" style={{ marginTop: 18 }}>
+            <button
+              className="btn"
+              disabled={busy}
+              onClick={async () => {
+                if (
+                  confirm(
+                    'Replace your budget with demo data? You can undo this during this session.'
+                  ) &&
+                  (await mutate(() => window.budget.loadDemoData()))
+                )
+                  setProfile(null)
+              }}
+            >
               Load demo data
             </button>
             <button
               className="btn btn--danger"
               onClick={() => {
                 if (confirm('Erase everything and start over?'))
-                  void mutate(() => window.budget.resetData())
+                  void mutate(() => window.budget.resetData()).then((ok) => {
+                    if (ok) setProfile(null)
+                  })
               }}
             >
               Reset everything
@@ -182,7 +257,6 @@ export function Settings(): JSX.Element {
     </>
   )
 }
-
 
 function ThemePicker({
   current,
@@ -247,7 +321,10 @@ function CategoryEditor({
           <tr>
             <th>Category</th>
             <th style={{ width: 170 }}>Monthly limit</th>
-            <th style={{ width: 120 }} title="A bill charged as one lump each month, like rent. These skip pace projection.">
+            <th
+              style={{ width: 120 }}
+              title="A bill charged as one lump each month, like rent. These skip pace projection."
+            >
               Recurring bill
             </th>
             <th style={{ width: 80 }} />
@@ -263,7 +340,9 @@ function CategoryEditor({
                     defaultValue={c.name}
                     onBlur={(e) =>
                       e.target.value !== c.name &&
-                      void mutate(() => window.budget.upsertCategory({ ...c, name: e.target.value }))
+                      void mutate(() =>
+                        window.budget.upsertCategory({ ...c, name: e.target.value })
+                      )
                     }
                   />
                 </div>
@@ -319,7 +398,12 @@ function CategoryEditor({
           e.preventDefault()
           if (!newName.trim()) return
           void mutate(() =>
-            window.budget.upsertCategory({ name: newName, monthlyLimit: 0, color: '', fixed: false })
+            window.budget.upsertCategory({
+              name: newName,
+              monthlyLimit: 0,
+              color: '',
+              fixed: false
+            })
           )
           setNewName('')
         }}

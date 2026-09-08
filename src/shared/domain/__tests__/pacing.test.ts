@@ -24,6 +24,9 @@ function makeData(partial: Partial<AppData> = {}): AppData {
     ],
     goals: [],
     transactions: [],
+    rules: [],
+    bills: [],
+    importPresets: [],
     ...partial
   }
 }

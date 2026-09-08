@@ -47,7 +47,7 @@ npm run dev     # launches the app with hot reload
 Other scripts:
 
 ```bash
-npm test          # 50 unit tests over the pacing, goal and CSV logic
+npm test          # 156 tests over the domain logic, storage and local workflows
 npm run typecheck # tsc over both the Node and the browser sides
 npm run build     # typecheck + production bundle into out/
 npm run dist:mac  # a signed-less .dmg in release/ (needs macOS)
@@ -58,6 +58,25 @@ can see every screen working, and `resources/sample-statement.csv` is a fake ban
 export for trying the CSV importer.
 
 ## What's in the MVP
+
+- **Statement imports with saved bank formats** — choose or drop a CSV, adjust column
+  mappings and date/amount conventions, and save a named preset for next time. Preview
+  automatic categories, skipped rows and duplicates before importing. Imported rows go
+  into a review queue. Duplicate checking also catches repeated lines within one file.
+- **Automatic category rules** — match description text to categories; the longest
+  matching phrase wins. Apply rules to incoming uncategorized expenses or review a count
+  before applying them to existing ones. Explicit categories are preserved.
+- **Bulk cleanup and undo** — categorize, mark reviewed or delete selected transactions;
+  search, sort and filter by type/category/review status; display 100 rows per page.
+  Undo up to 20 successful changes during the current app session.
+- **Bills** — monthly and yearly schedules with due dates, including month-end/leap-year
+  handling. Record an expense or link an existing imported payment. Bills reserve money
+  in their fixed category; linked payments are not added a second time.
+- **Reports** — 6- and 12-month recorded income, expenses and net cash flow, plus spending
+  by category. Estimates are kept separate from recorded activity.
+- **Data portability** — export all matching transactions as CSV, save a complete JSON
+  backup, and restore a validated backup. Restore first creates a local recovery copy.
+  Failed saves preserve the editor and show a dismissible error.
 
 - **Dashboard** — the red/yellow/green verdict, spend so far vs. plan, projected
   month-end, the gap between what you're on pace to save and what the goals need, and
@@ -77,7 +96,10 @@ export for trying the CSV importer.
 - **Goals** — a *goal of the year* and *long-term* goals, each showing progress and the
   monthly saving it demands.
 - **Settings** — name and avatar, theme, salary or hourly income with a withholding
-  estimate, and editable per-category monthly budgets.
+  estimate, editable per-category monthly budgets, and an explicit dashboard income basis.
+  Choose estimate-only, recorded-income-only, or estimate plus extra income. Existing
+  budgets keep their prior additive behavior; imports containing income prompt for the
+  intended basis so a paycheck need not be counted twice.
 - **Themes** — nine of them, seven light and two dark, defaulting to *Sand* (warm light
   brown). Four of the light options are warm-toned: Sand, Clay, Parchment and Olive. They're plain data in `src/shared/themes.ts`: a token map applied to
   `<html>` as CSS custom properties at runtime, so the stylesheet never names a colour
@@ -126,10 +148,38 @@ fast — which matters most for a product whose value is a glanceable colour.
 
 ## Roadmap
 
+The [market comparison and prioritized roadmap](docs/market-research.md) records
+competitor strengths, tradeoffs, user-feedback sources and the decisions for this app.
+This iteration follows the product preference: local desktop first, with less manual
+transaction entry through reusable bank CSV imports.
+
+- [x] Saved CSV formats, categorization rules, bulk review and undo
+- [x] Monthly/yearly bills, reports, backup/restore and CSV export
+- [ ] Account balances, transfers, reconciliation and split transactions
+- [ ] Per-month budget history, rollover and sinking funds
+
 - [ ] Mobile client (React Native) reusing `src/shared/`
 - [ ] Real accounts + sync (this is where the email/phone signup, verification code and
       Face ID unlock from the product notes belong)
 - [ ] Bank connections via Plaid instead of CSV
 - [ ] Automatic recurring-bill *detection* (the `fixed` flag is set by hand today)
 - [ ] SQLite storage adapter
-- [ ] Spending trends across months
+- [x] Spending trends across months
+
+## Using a bank CSV
+
+1. Open **Settings → Automatic categories** and add rules for recurring merchants.
+2. Open **Transactions → Import CSV**, select a saved bank format or start with auto-detect,
+   then choose or drop your statement.
+3. If necessary, expand **Adjust columns & save bank format**. Set the header mappings,
+   date convention and amount direction, then save a named format for later statements.
+4. Review the preview and income basis, then import. Select **Needs review** to categorize
+   and approve rows in batches. Re-imports skip matching transactions by default.
+5. In **Bills**, link any imported bill payments to their schedules. In **Settings → Data
+   & backups**, save a full backup periodically.
+
+CSV files must have a header row and be at most 25 MB. Duplicate matching uses the date,
+amount, description and income/expense type. Turn off duplicate skipping for legitimate
+identical purchases. Transfers, credit-card payments and refunds need careful review:
+the app does not yet have an account/transfer model. Reports reflect the records present,
+including future-dated entries, rather than a reconciled bank balance.

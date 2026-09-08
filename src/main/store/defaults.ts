@@ -31,8 +31,9 @@ export function slug(name: string): string {
 
 export function defaultAppData(): AppData {
   return {
-    version: 1,
+    version: 2,
     profile: {
+      incomeBasis: 'estimate',
       name: '',
       avatarEmoji: '🙂',
       currency: 'USD',
@@ -45,7 +46,10 @@ export function defaultAppData(): AppData {
     },
     categories: defaultCategories(),
     goals: [],
-    transactions: []
+    transactions: [],
+    rules: [],
+    bills: [],
+    importPresets: []
   }
 }
 

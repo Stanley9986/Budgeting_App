@@ -25,7 +25,7 @@ describe('BudgetStore', () => {
     expect(data.categories.length).toBeGreaterThan(0)
     expect(data.transactions).toEqual([])
     const onDisk = JSON.parse(readFileSync(db.path, 'utf-8')) as AppData
-    expect(onDisk.version).toBe(1)
+    expect(onDisk.version).toBe(2)
   })
 
   it('persists a transaction to disk', () => {

@@ -6,6 +6,8 @@ import { BudgetStore } from './store/budgetStore'
 import { JsonDatabase } from './store/jsonDatabase'
 
 const isDev = !app.isPackaged
+// Development and smoke tests can use a disposable budget without touching personal data.
+if (isDev && process.env.BUDGET_DATA_DIR) app.setPath('userData', process.env.BUDGET_DATA_DIR)
 
 function createWindow(backgroundColor: string): BrowserWindow {
   const window = new BrowserWindow({

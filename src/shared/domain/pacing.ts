@@ -2,6 +2,7 @@ import type { AppData, Category, Profile, Transaction } from '../types'
 import { daysInMonth, monthKey } from './dates'
 import { requiredMonthlySavings } from './goals'
 import { round2 } from './money'
+import { billsForMonth } from './bills'
 
 /**
  * The colour system from the product notes:
@@ -122,6 +123,7 @@ export function computeMonthPace(data: AppData, key: string, today = new Date())
   const totalDays = daysInMonth(year, month)
   const elapsed = elapsedFraction(today, key)
   const monthTxs = transactionsForMonth(data.transactions, key)
+  const outstanding = billsForMonth(data, key).filter((b) => !b.transaction)
 
   const spentByCategory = new Map<string, number>()
   const fixedIds = new Set(data.categories.filter((c) => c.fixed).map((c) => c.id))
@@ -151,12 +153,22 @@ export function computeMonthPace(data: AppData, key: string, today = new Date())
     // A fixed bill that has not been charged yet is still owed, so its month-end
     // figure is the limit; once charged, whatever was actually charged.
     const projected = category.fixed
-      ? round2(Math.max(catSpent, category.monthlyLimit))
+      ? round2(
+          Math.max(
+            catSpent +
+              outstanding
+                .filter((b) => b.bill.categoryId === category.id)
+                .reduce((s, b) => s + b.bill.amount, 0),
+            category.monthlyLimit
+          )
+        )
       : round2(catSpent / elapsed)
     return {
       category,
       spent: catSpent,
-      expectedByNow: round2(category.fixed ? category.monthlyLimit : category.monthlyLimit * elapsed),
+      expectedByNow: round2(
+        category.fixed ? category.monthlyLimit : category.monthlyLimit * elapsed
+      ),
       projected,
       remaining: round2(category.monthlyLimit - catSpent),
       ratio: category.monthlyLimit > 0 ? catSpent / category.monthlyLimit : catSpent > 0 ? 1 : 0,
@@ -178,7 +190,11 @@ export function computeMonthPace(data: AppData, key: string, today = new Date())
   const fixedCommitted = round2(
     categories.filter((c) => c.category.fixed).reduce((s, c) => s + c.projected, 0)
   )
-  const income = round2(monthlyIncome(data.profile) + extraIncome)
+  const income = round2(
+    data.profile.incomeBasis === 'recorded'
+      ? extraIncome
+      : monthlyIncome(data.profile) + (data.profile.incomeBasis === 'estimate' ? 0 : extraIncome)
+  )
   const projectedSpend = round2(fixedCommitted + variableSpent / elapsed)
   const projectedSavings = round2(income - projectedSpend)
   const required = requiredMonthlySavings(data.goals, today)

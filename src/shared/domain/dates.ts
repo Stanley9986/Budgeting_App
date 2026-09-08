@@ -12,6 +12,15 @@ export function fromISODate(s: string): Date {
   return new Date(y, (m ?? 1) - 1, d ?? 1)
 }
 
+export function isISODate(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    Number(value.slice(0, 4)) >= 1000 &&
+    toISODate(fromISODate(value)) === value
+  )
+}
+
 /** yyyy-mm key used to bucket transactions by month. */
 export function monthKey(isoDate: string): string {
   return isoDate.slice(0, 7)

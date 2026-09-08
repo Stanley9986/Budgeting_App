@@ -23,7 +23,11 @@ export function Goals(): JSX.Element {
   const yearGoals = progress.filter((g) => g.goal.horizon === 'year')
   const longTerm = progress.filter((g) => g.goal.horizon === 'long-term')
 
-  const section = (title: string, items: typeof progress, horizon: NewGoal['horizon']): JSX.Element => (
+  const section = (
+    title: string,
+    items: typeof progress,
+    horizon: NewGoal['horizon']
+  ): JSX.Element => (
     <Card
       title={title}
       actions={
@@ -45,7 +49,8 @@ export function Goals(): JSX.Element {
               <div>
                 <h3 className="goal-card__name">{g.goal.name}</h3>
                 <div className="faint" style={{ fontSize: 12, marginTop: 3 }}>
-                  due {new Date(g.goal.targetDate).toLocaleDateString('en-US', {
+                  due{' '}
+                  {new Date(g.goal.targetDate).toLocaleDateString('en-US', {
                     month: 'long',
                     year: 'numeric'
                   })}
@@ -74,7 +79,8 @@ export function Goals(): JSX.Element {
               <div>
                 <span className="stat__label">Saved</span>
                 <span className="tabular">
-                  {money(g.goal.savedAmount)} of {money(g.goal.targetAmount)} ({formatPct(g.progress)})
+                  {money(g.goal.savedAmount)} of {money(g.goal.targetAmount)} (
+                  {formatPct(g.progress)})
                 </span>
               </div>
               <div>
@@ -101,8 +107,8 @@ export function Goals(): JSX.Element {
           <h1>Goals</h1>
           <p>
             Together your goals need{' '}
-            <strong className="tabular">{money(pace.requiredSavings)}</strong> set aside every month.
-            This month you are pacing to save{' '}
+            <strong className="tabular">{money(pace.requiredSavings)}</strong> set aside every
+            month. This month you are pacing to save{' '}
             <strong className={`tabular text-${pace.savingsGap >= 0 ? 'green' : 'red'}`}>
               {money(pace.projectedSavings)}
             </strong>
@@ -137,7 +143,9 @@ function GoalDialog({
       <form
         onSubmit={(e) => {
           e.preventDefault()
-          void mutate(() => window.budget.upsertGoal(draft)).then(onClose)
+          void mutate(() => window.budget.upsertGoal(draft)).then((saved) => {
+            if (saved) onClose()
+          })
         }}
       >
         <div className="form-grid">
@@ -152,7 +160,9 @@ function GoalDialog({
           <Field label="Horizon">
             <select
               value={draft.horizon}
-              onChange={(e) => setDraft({ ...draft, horizon: e.target.value as NewGoal['horizon'] })}
+              onChange={(e) =>
+                setDraft({ ...draft, horizon: e.target.value as NewGoal['horizon'] })
+              }
             >
               <option value="year">Goal of the year</option>
               <option value="long-term">Long term</option>
@@ -176,7 +186,10 @@ function GoalDialog({
               onChange={(e) => setDraft({ ...draft, savedAmount: Number(e.target.value) })}
             />
           </Field>
-          <Field label="Target date" hint="What is left gets spread evenly over the months until then.">
+          <Field
+            label="Target date"
+            hint="What is left gets spread evenly over the months until then."
+          >
             <input
               type="date"
               value={draft.targetDate}
@@ -188,7 +201,11 @@ function GoalDialog({
           <button type="button" className="btn" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="btn btn--primary" disabled={!draft.name || draft.targetAmount <= 0}>
+          <button
+            type="submit"
+            className="btn btn--primary"
+            disabled={!draft.name || draft.targetAmount <= 0}
+          >
             {isEdit ? 'Save goal' : 'Add goal'}
           </button>
         </div>

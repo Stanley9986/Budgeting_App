@@ -2,6 +2,7 @@ import { monthLabel } from '@shared/domain/dates'
 import { allGoalProgress } from '@shared/domain/goals'
 import { formatMoney, formatPct } from '@shared/domain/money'
 import { STATUS_COPY } from '@shared/domain/pacing'
+import { billsForMonth } from '@shared/domain/bills'
 import type { Route } from '../App'
 import { MonthSwitcher } from '../components/MonthSwitcher'
 import { Bar, Card, EmptyState, Stat, STATUS_COLOR } from '../components/ui'
@@ -15,7 +16,13 @@ export function Dashboard({ onNavigate }: { onNavigate: (r: Route) => void }): J
   const money = (n: number): string => formatMoney(n, currency)
   const copy = STATUS_COPY[pace.status]
   const goals = allGoalProgress(data.goals)
-  const hasAnything = data.transactions.length > 0 || data.profile.annualSalary > 0
+  const hasAnything =
+    data.transactions.length > 0 ||
+    data.profile.annualSalary > 0 ||
+    data.profile.hourlyRate > 0 ||
+    data.goals.length > 0 ||
+    data.bills.length > 0
+  const upcoming = billsForMonth(data, month).filter((r) => !r.transaction)
 
   return (
     <>
@@ -37,7 +44,10 @@ export function Dashboard({ onNavigate }: { onNavigate: (r: Route) => void }): J
                   <button className="btn btn--primary" onClick={() => onNavigate('settings')}>
                     Set up my income
                   </button>
-                  <button className="btn" onClick={() => void mutate(() => window.budget.loadDemoData())}>
+                  <button
+                    className="btn"
+                    onClick={() => void mutate(() => window.budget.loadDemoData())}
+                  >
                     Load demo data
                   </button>
                 </div>
@@ -80,7 +90,9 @@ export function Dashboard({ onNavigate }: { onNavigate: (r: Route) => void }): J
         <Stat
           label="Projected month-end"
           value={money(pace.projectedSpend)}
-          tone={pace.budgetTotal > 0 && pace.projectedSpend > pace.budgetTotal ? 'yellow' : undefined}
+          tone={
+            pace.budgetTotal > 0 && pace.projectedSpend > pace.budgetTotal ? 'yellow' : undefined
+          }
           sub={
             pace.budgetTotal > 0
               ? pace.projectedSpend > pace.budgetTotal
@@ -104,7 +116,9 @@ export function Dashboard({ onNavigate }: { onNavigate: (r: Route) => void }): J
       <div className="grid grid--2">
         <Card title="Where the money went">
           {data.categories.length === 0 ? (
-            <EmptyState title="No categories yet">Add some in Settings to track spending.</EmptyState>
+            <EmptyState title="No categories yet">
+              Add some in Settings to track spending.
+            </EmptyState>
           ) : (
             <div>
               {[...pace.categories]
@@ -181,6 +195,32 @@ export function Dashboard({ onNavigate }: { onNavigate: (r: Route) => void }): J
           )}
         </Card>
       </div>
+      {upcoming.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <Card
+            title="Bills still to record"
+            actions={
+              <button className="btn btn--ghost" onClick={() => onNavigate('bills')}>
+                Manage bills
+              </button>
+            }
+          >
+            {upcoming.slice(0, 4).map((r) => (
+              <div className="list-row" key={r.bill.id}>
+                <div>
+                  <strong>{r.bill.name}</strong>
+                  <div className="muted">Due {r.dueDate}</div>
+                </div>
+                <strong className="tabular">{money(r.bill.amount)}</strong>
+              </div>
+            ))}
+            <p className="muted">
+              Reserved in the month-end projection. Link payments already in your transactions to
+              keep this accurate.
+            </p>
+          </Card>
+        </div>
+      )}
     </>
   )
 }
